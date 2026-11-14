@@ -8,7 +8,10 @@ Responde siempre en español.
 
 ## 1. Qué es
 
-Proyecto para un hackatón que usa la **API de pey en su modalidad CoDi**. Somos 2 integrantes (Miguel Ángel y Rafael) y tenemos un plazo de ~20 h a partir del sáb 14 nov 2026, 13:30. El reparto de tareas lo acordamos entre nosotros y no se define aquí.
+Proyecto para un hackatón que usa la **API de pey en su modalidad CoDi**. Somos 2 integrantes (Miguel Ángel y Rafael) y tenemos un plazo de ~20 h a partir del sáb 14 nov 2026, 13:30. El trabajo se divide **por actor del sistema**:
+
+- **Rafael:** lado del **mecánico**.
+- **Miguel Ángel:** lado del **usuario (cliente)**.
 
 TallerToGo es una página web para un taller mecánico especializado **solo en suspensión** de autos **Chevrolet 2025**. El taller trabaja con **solo dos marcas de refacciones: OEM y GM**. El flujo es así:
 
