@@ -72,7 +72,7 @@ Fotos del diagnóstico, inventario, facturación, notificaciones por correo o Wh
 
 - La alta propia ante Banxico tarda aprox. **5 días**. Para probar hoy se usan las **CLABEs preautorizadas** que entregaron los organizadores.
   - Esas CLABEs **no se suben al repo**: el repo es público. Se consultan en la hoja del hackatón.
-- Hay que **dar de alta las CLABEs en el portal de pey** (`portal.pey.mx` según la hoja; la documentación dice `portal.mipey.mx`) y empezar a usar la API el mismo día.
+- Hay que **dar de alta las CLABEs en el portal de pey** (`portal.pey.mx` y `portal.mipey.mx` son el mismo portal) y empezar a usar la API el mismo día.
 - Las transacciones de prueba son de **$0.01**. **Los pagos de prueba no se devuelven.**
 - Cada equipo registra sus propias cuentas CLABE para publicar el proyecto cuando estén activas.
 - Documentación: https://docs.pey.mx
