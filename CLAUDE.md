@@ -4,7 +4,23 @@ Este archivo da contexto a Claude (y al equipo) en cada sesión. **Es la fuente 
 
 Responde siempre en español.
 
-**Etapa actual:** estamos **delimitando el proyecto**. Todavía no hay código. No propongas ni generes código salvo que te lo pidan explícitamente. El código de ejemplo que aparece en `docs/contexto-proyecto.md` **se ignora**.
+**Etapa actual:** ya empezó el desarrollo del **frontend**. Las pantallas que existen usan datos de ejemplo y **todavía no están conectadas a Supabase ni a pey** (lo que falta está marcado con `TODO` en el código). No propongas ni generes código salvo que te lo pidan explícitamente. El código de ejemplo que aparece en `docs/contexto-proyecto.md` **se ignora**.
+
+### Lo que hay en el repo
+
+- `CLAUDE.md` (este archivo) y `README.md`.
+- `docs/`: `catalogo-suspension-corvette-z06.md`, `contexto-proyecto.md` y `base-de-datos.md` (ver sección 2).
+- `frontend/`: app en **Next.js 16** (App Router) + TypeScript + Tailwind CSS 4. Para correrla: `cd frontend`, `npm install` y `npm run dev` (abre en http://localhost:3000).
+  - `app/page.tsx`: redirige a `/login`.
+  - `app/login/page.tsx` (pantalla 1, login): falta conectar Supabase Auth.
+  - `app/registro/page.tsx` (pantalla 2, registro): falta registrar en Supabase Auth y guardar el perfil.
+  - `app/inicio/page.tsx` (pantalla 3, inicio del cliente y registro de hasta 3 autos): falta leer el usuario y guardar los autos.
+  - `app/taller/page.tsx` (pantalla 4, autos por atender del mecánico): usa datos de ejemplo; falta leerlos de Supabase y guardar los cambios de etapa.
+  - `components/BarraSuperior.tsx`: barra superior común.
+  - `components/SeguimientoEnVivo.tsx`: franja de seguimiento por auto (pastillas con las placas); después se conectará a Supabase Realtime.
+  - `AGENTS.md`: Next.js 16 trae cambios; antes de escribir código hay que leer las guías en `node_modules/next/dist/docs/`.
+- **Faltan:** las pantallas de diagnóstico del mecánico, diagnóstico y carrito del cliente, pago con QR y ticket, y la conexión con Supabase y pey.
+- Algunos `TODO` del código nombran tablas en inglés (`profiles`, `vehicles`, `customer_id`). En la base se llaman `perfil`, `carro` e `id_cliente`: usa siempre los nombres de `docs/base-de-datos.md`.
 
 ## 1. Qué es
 
@@ -18,12 +34,13 @@ TallerToGo es una página web para un taller mecánico especializado **solo en s
 1. El mecánico diagnostica el auto y registra cada falla como una **pieza en una posición concreta**, con la mano de obra de esa falla.
 2. Envía el diagnóstico al cliente.
 3. El cliente ve las fallas, elige cuáles reparar y elige la marca (OEM o GM) de cada pieza.
-4. Manda todo al carrito, con la mano de obra incluida, y paga con **CoDi por QR a través de pey**.
-5. Cuando pey confirma el pago, la orden queda pagada y el cliente sigue la reparación **en vivo**.
+4. Manda lo elegido al carrito, con la mano de obra incluida, y paga con **CoDi por QR a través de pey**. Puede comprar solo una parte y pagar las fallas restantes después, en otra orden (**compras parciales**).
+5. Cuando pey confirma el pago, esa orden queda pagada (es el ticket) y el cliente sigue la reparación **en vivo**.
 
 ## 2. Documentos de referencia (`docs/`)
 
 - `docs/catalogo-suspension-corvette-z06.md`: catálogo del **auto de la demo** (Corvette Z06 2025), pieza por pieza y posición por posición. De ahí salen los datos hardcodeados.
+- `docs/base-de-datos.md`: **modelo de la base de datos** (E-R, tablas, diccionario de datos, llaves foráneas, mapa de qué dato usa cada pantalla y el SQL para Supabase). Consúltalo antes de conectar cualquier pantalla con la base.
 - `docs/contexto-proyecto.md`: antecedente con la idea original. Ya está **superado por este archivo** en tres puntos: marcas, granularidad de las piezas y la sección de código, que se ignora.
 
 ## 3. Stack
@@ -46,17 +63,18 @@ No se agregan otros lenguajes ni frameworks. Se descartó Python/Django para no 
 - **Unicidad:** cada pieza-posición existe **una sola vez** por vehículo. Por eso, la cantidad de cada falla siempre es 1, y en un mismo diagnóstico no se repite la misma pieza-posición.
 - **Mano de obra por falla**, no un total único. Solo se cobra si el cliente compra la pieza de esa falla.
 - **El cliente solo puede comprar las piezas que diagnosticó el mecánico.** No puede agregar piezas por su cuenta.
+- **Compras parciales:** el cliente compra desde la vista del diagnóstico y puede pagarlo en **varias órdenes** (mientras el diagnóstico esté en `enviado` o `pagado`), pero **cada falla se compra una sola vez**. Si deja fallas sin elegir, la app muestra un modal de confirmación ("Aún te faltan piezas del diagnóstico por comprar; podrás pagarlas después"). Con el diagnóstico en `en_reparacion`, las fallas sin comprar quedan como no compradas.
 - El cliente **solo ve diagnósticos enviados** (no los borradores) y solo de sus autos.
 - **El servidor calcula el total.** Nunca se confía en precios ni cantidades que vengan del navegador.
-- **Solo la confirmación de pey (webhook) marca una orden como pagada**, después de verificar firma, monto y vigencia. Un pago repetido se ignora. Un pago tardío o con un monto distinto se marca para reembolso.
+- **Solo la confirmación de pey (webhook) marca una orden como pagada**, después de verificar firma, monto y vigencia. Un pago repetido se ignora. **No hay reembolsos:** un pago a un QR cancelado o vencido, tardío o con un monto distinto se marca como `rechazado` (queda registrado, pero no se aplica).
 - **Pago solo con CoDi vía pey.** Nada de tarjetas ni payment links.
 
 ### Estados
 
 | Entidad | Flujo | Quién lo cambia |
 | --- | --- | --- |
-| Diagnóstico | borrador → enviado → pagado → en_reparacion → listo → entregado | El mecánico; `pagado` lo pone solo la confirmación de pey |
-| Orden | pendiente → pagado / expirado / reembolso | Solo el servidor |
+| Diagnóstico | borrador → enviado → pagado → en_reparacion → listo → entregado | El mecánico; `pagado` lo pone solo la confirmación de pey (con el primer pago) |
+| Orden | pendiente → pagado / expirado / rechazado | Solo el servidor. `expirado` incluye el QR que se cancela al generar otro |
 
 El **seguimiento en vivo** que ve el cliente es el estado del diagnóstico desde `enviado`, actualizado en tiempo real con Supabase Realtime. Se muestra **por auto**: en la franja de seguimiento, el cliente elige con pastillas (las placas) de qué auto ve el avance.
 
@@ -141,7 +159,7 @@ Los ganadores se anuncian por correo.
 - Trata cada pieza-posición como un dato independiente. Nunca agrupes izquierda y derecha en un solo registro.
 - Para pey, usa solo lo que está en la sección 6 o en docs.pey.mx. No inventes campos.
 - No escribas CLABEs, API keys ni secretos en ningún archivo del repo.
-- Estamos en la etapa de delimitación: antes de generar código, confirma que te lo pidieron.
+- Antes de generar código, confirma que te lo pidieron. Para conectar una pantalla con la base, usa `docs/base-de-datos.md`.
 - Si una decisión cambia, propón la edición a este `CLAUDE.md` en el mismo cambio.
 - Para cualquier pantalla, usa solo los colores y la tipografía de la sección 11.
 
