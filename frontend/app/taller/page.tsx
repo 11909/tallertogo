@@ -6,9 +6,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import BarraSuperior from "@/components/BarraSuperior";
+import MenuMecanico from "@/components/MenuMecanico";
 import { Muestra } from "@/components/SeguimientoEnVivo";
 import { buscarColor } from "@/lib/colores";
-import { AUTOS_DEMO, ETAPAS_TALLER, normalizar, type AutoTaller, type EtapaTaller } from "@/lib/autosTaller";
+import { AUTOS_DEMO, ETAPAS_TALLER, hora, normalizar, ordenarPorTurno, turnoDe, type AutoTaller, type EtapaTaller } from "@/lib/autosTaller";
 
 type Filtro = "todos" | "por_diagnosticar" | "esperando_pago" | "en_reparacion" | "listo" | "entregado";
 
@@ -47,15 +48,15 @@ export default function TallerPage() {
 
   const visibles = useMemo(() => {
     const q = normalizar(busqueda);
-    return autos.filter(
+    return ordenarPorTurno(autos).filter(
       (a) =>
         coincideFiltro(a.etapa, filtro) &&
         (!q || normalizar(a.placas).includes(q) || normalizar(a.folio ?? "").includes(q))
     );
   }, [autos, filtro, busqueda]);
 
-  // El botón amarillo es "Diagnosticar" del primer auto que espera diagnóstico
-  const primeroPorDiagnosticar = visibles.find((a) => a.etapa === "por_diagnosticar")?.id;
+  // Se diagnostica por orden de llegada y se repara por orden de pago.
+  // El botón amarillo es el turno 1 de diagnóstico; el turno 1 de reparación lleva la etiqueta "Siguiente".
 
   function avanzar(id: string) {
     // TODO: guardar el cambio de etapa en Supabase (el cliente lo ve en vivo).
@@ -69,25 +70,7 @@ export default function TallerPage() {
 
   return (
     <div className="flex min-h-screen flex-1 flex-col">
-      <BarraSuperior
-        derecha={
-          <div className="flex items-center gap-3 text-sm text-suave">
-            <span className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-tinta text-[13px] font-semibold text-acento">
-              TM
-            </span>
-            <span>
-              <span className="block font-semibold text-tinta">Taller Paddock</span>
-              <span className="text-xs">Mecánico</span>
-            </span>
-            <Link
-              href="/login"
-              className="ml-1 rounded-lg border border-borde bg-tarjeta px-3.5 py-2 font-semibold text-tinta hover:border-tinta"
-            >
-              Salir
-            </Link>
-          </div>
-        }
-      />
+      <BarraSuperior derecha={<MenuMecanico />} />
 
       <main className="mx-auto w-full max-w-[1240px] px-12 py-8">
         <div className="flex items-end justify-between gap-6">
@@ -162,7 +145,7 @@ export default function TallerPage() {
                 <th className="px-4 py-3 font-semibold">Color</th>
                 <th className="px-4 py-3 font-semibold">Folio</th>
                 <th className="px-4 py-3 font-semibold">Etapa</th>
-                <th className="px-4 py-3 font-semibold">Última actualización</th>
+                <th className="px-4 py-3 font-semibold">Turno / actualización</th>
                 <th className="px-4 py-3 text-right font-semibold">Acción</th>
               </tr>
             </thead>
@@ -170,7 +153,15 @@ export default function TallerPage() {
               {visibles.map((auto) => {
                 const etapa = ETAPAS_TALLER[auto.etapa];
                 const color = buscarColor(auto.colorCodigo);
-                const primario = auto.id === primeroPorDiagnosticar;
+                const turno = turnoDe(auto, autos);
+                const primario = auto.etapa === "por_diagnosticar" && turno === 1;
+                const siguienteReparacion = auto.etapa === "pagado" && turno === 1;
+                const detalle =
+                  turno && auto.etapa === "por_diagnosticar"
+                    ? `llegó a las ${hora(auto.registradoEn)}`
+                    : turno && auto.pagadoEn
+                      ? `pagó a las ${hora(auto.pagadoEn)}`
+                      : auto.actualizacion;
                 const claseBoton = `inline-flex h-9 cursor-pointer items-center justify-center rounded-lg border px-3.5 text-sm font-semibold whitespace-nowrap ${
                   primario ? "border-acento bg-acento text-tinta hover:brightness-95" : "border-borde bg-tarjeta text-tinta hover:border-tinta"
                 }`;
@@ -203,8 +194,19 @@ export default function TallerPage() {
                     <td className="px-4 py-3">
                       <ChipEtapa texto={etapa.etiqueta} estilo={etapa.estilo} />
                     </td>
-                    <td className="px-4 py-3 text-[13px] whitespace-nowrap text-suave">{auto.actualizacion}</td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-4 py-3 text-[13px] whitespace-nowrap text-suave">
+                      {turno ? (
+                        <>
+                          <span className="font-semibold text-tinta">Turno {turno}</span> · {detalle}
+                        </>
+                      ) : (
+                        detalle
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      {siguienteReparacion && (
+                        <span className="mr-2 rounded-full border border-tinta px-2 py-0.5 text-xs font-semibold">Siguiente</span>
+                      )}
                       {etapa.siguiente ? (
                         <button type="button" onClick={() => avanzar(auto.id)} className={claseBoton}>
                           {etapa.accion}

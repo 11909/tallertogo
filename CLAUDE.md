@@ -119,7 +119,8 @@ Los ganadores se anuncian por correo.
 - **Acceso:** login, registro de cliente y registro de sus autos (hasta 3 Corvette Z06 2025).
 - **Mecánico:**
   - Lista de autos y diagnósticos.
-  - Formulario de fallas: se elige una pieza-posición del catálogo y se captura la descripción de la falla y la mano de obra.
+  - Formulario de diagnóstico: una **descripción general de la falla** por diagnóstico; se eligen pieza-posición del catálogo (con buscador y filtros por eje y lado) y se captura la **mano de obra de cada falla**.
+  - Cada diagnóstico tiene un **folio** (`DG-00000`) que se asigna al empezar. Las pantallas del mecánico muestran placas, color y folio, **no** los datos del cliente.
   - Botón "Enviar diagnóstico" y botones para avanzar el estado de la reparación.
 - **Cliente:**
   - Diagnóstico con las fallas y la ubicación de cada pieza.
