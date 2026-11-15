@@ -12,11 +12,14 @@ Responde siempre en español.
 - `docs/`: `catalogo-suspension-corvette-z06.md`, `contexto-proyecto.md` y `base-de-datos.md` (ver sección 2).
 - `frontend/`: app en **Next.js 16** (App Router) + TypeScript + Tailwind CSS 4. Para correrla: `cd frontend`, `npm install` y `npm run dev` (abre en http://localhost:3000).
   - `app/page.tsx`: redirige a `/login`.
-  - `app/login/page.tsx` (pantalla 1, login): falta conectar Supabase Auth.
-  - `app/registro/page.tsx` (pantalla 2, registro): falta registrar en Supabase Auth y guardar el perfil.
-  - `app/inicio/page.tsx` (pantalla 3, inicio del cliente y registro de hasta 3 autos): falta leer el usuario y guardar los autos.
+  - `app/login/page.tsx` (pantalla 1, login): conectada a Supabase Auth; manda a `/inicio` (cliente) o `/taller` (mecánico) según el rol.
+  - `app/registro/page.tsx` (pantalla 2, registro de **Cliente** o **Trabajador**): conectada a Supabase Auth y a `perfil`. Pide nombre, apellidos, correo, teléfono y contraseña; "Trabajador" se guarda como `rol = 'mecanico'`.
+  - `app/inicio/page.tsx` (pantalla 3, inicio del cliente): lee el usuario y sus autos de Supabase, busca el modelo con un combo con buscador, registra hasta 20 autos (el formulario solo se abre si el cliente elige "Agregar otro auto"), elimina autos sin diagnóstico y actualiza el seguimiento en vivo.
   - `app/taller/page.tsx` (pantalla 4, autos por atender del mecánico): usa datos de ejemplo; falta leerlos de Supabase y guardar los cambios de etapa.
   - `components/BarraSuperior.tsx`: barra superior común.
+  - `components/Aviso.tsx`: mensajes de confirmación y de error que usan todas las pantallas.
+  - `components/BuscadorOpciones.tsx`: combo box con buscador (se usa para elegir el modelo del auto).
+  - `lib/supabase/`: clientes de Supabase (`cliente.ts` navegador, `servidor.ts` servidor con sesión, `admin.ts` solo servidor con la llave secreta).
   - `components/SeguimientoEnVivo.tsx`: franja de seguimiento por auto (pastillas con las placas); después se conectará a Supabase Realtime.
   - `AGENTS.md`: Next.js 16 trae cambios; antes de escribir código hay que leer las guías en `node_modules/next/dist/docs/`.
 - **Faltan:** las pantallas de diagnóstico del mecánico, diagnóstico y carrito del cliente, pago con QR y ticket, y la conexión con Supabase y pey.
@@ -51,9 +54,10 @@ No se agregan otros lenguajes ni frameworks. Se descartó Python/Django para no 
 
 ## 4. Reglas de negocio
 
-- **Login con rol:** cada usuario es `cliente` o `mecanico`. Solo hay una cuenta de mecánico, creada a mano.
+- **Login con rol:** cada usuario es `cliente` o `mecanico`. Los dos se registran en la pantalla de registro (el botón "Trabajador" corresponde a `mecanico`). Solo los clientes registran autos.
 - **Solo Chevrolet 2025.**
-- **Hasta 3 autos por cliente.** Cada auto se registra con sus placas (únicas) y uno de los **10 colores de fábrica** del Corvette Z06 2025: Arctic White, Black, Competition Yellow Tintcoat Metallic, Hysteria Purple Metallic, Rapid Blue, Red Mist Metallic Tintcoat, Riptide Blue Metallic, Sea Wolf Gray Tricoat, Sebring Orange Tintcoat y Torch Red. No se pide el número de serie (VIN).
+- **Hasta 20 autos por cliente.** Cada auto se registra con sus placas (únicas) y uno de los **10 colores de fábrica** del Corvette Z06 2025: Arctic White, Black, Competition Yellow Tintcoat Metallic, Hysteria Purple Metallic, Rapid Blue, Red Mist Metallic Tintcoat, Riptide Blue Metallic, Sea Wolf Gray Tricoat, Sebring Orange Tintcoat y Torch Red. No se pide el número de serie (VIN).
+- **Eliminar un auto:** el cliente puede eliminar un auto **solo si el mecánico todavía no empieza su diagnóstico** (ni siquiera un borrador), así que ese auto no tiene órdenes de pago ni tickets. Lo valida la base con la función `eliminar_carro` (ver `docs/base-de-datos.md`).
 - **Cada auto tiene su propio diagnóstico, recibo y seguimiento.** Un auto puede estar en reparación mientras otro sigue en diagnóstico.
 - **Solo 2 marcas: OEM y GM.** Cada pieza-posición del catálogo existe en las dos marcas, cada una con su nombre y su precio. **No** se etiquetan como "económica" o "premium".
 - **Granularidad 1 a 1 (pieza-posición):** cada combinación de pieza y posición del catálogo es un **dato independiente**, con su propio ID. Por ejemplo, `SUS-DEL-05-IZQ` (coilover delantero izquierdo) y `SUS-DEL-05-DER` (coilover delantero derecho) son dos piezas distintas, sin relación entre sí en la lógica de la app. No existe "ambos lados": si fallan los dos coilovers, se registran como dos fallas.
@@ -80,7 +84,7 @@ El **seguimiento en vivo** que ve el cliente es el estado del diagnóstico desde
 
 ### Fuera de alcance
 
-Fotos del diagnóstico, inventario, facturación, notificaciones por correo o WhatsApp, pantalla de registro de mecánicos, pantalla para administrar el catálogo (se carga como datos fijos) y otros métodos de pago.
+Fotos del diagnóstico, inventario, facturación, notificaciones por correo o WhatsApp, pantalla para administrar el catálogo (se carga como datos fijos) y otros métodos de pago.
 
 ## 5. Datos de la demo (hardcodeados)
 
@@ -134,7 +138,7 @@ Los ganadores se anuncian por correo.
 
 ## 8. Alcance funcional (pantallas)
 
-- **Acceso:** login, registro de cliente y registro de sus autos (hasta 3 Corvette Z06 2025).
+- **Acceso:** login, registro de cliente y registro de sus autos (hasta 20 Corvette Z06 2025).
 - **Mecánico:**
   - Lista de autos y diagnósticos.
   - Formulario de diagnóstico: una **descripción general de la falla** por diagnóstico; se eligen pieza-posición del catálogo (con buscador y filtros por eje y lado) y se captura la **mano de obra de cada falla**.

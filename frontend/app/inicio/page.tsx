@@ -1,62 +1,175 @@
 "use client";
 
 // Pantalla 3: Inicio del cliente con el registro de sus autos (diseñada para computadora)
-// - Hasta 3 autos por cliente, cada uno con placas y uno de los 10 colores de fábrica del Corvette Z06 2025.
+// - Hasta 20 autos por cliente, cada uno con placas y uno de los 10 colores de fábrica del Corvette Z06 2025.
+// - Si el cliente ya tiene autos, el formulario se abre solo cuando elige "Agregar otro auto".
 // - Cada auto tiene su propio diagnóstico, recibo y seguimiento.
-// Por ahora es solo la pantalla. Falta conectar el registro de autos y el usuario con Supabase.
+// Lee el usuario y sus autos de Supabase (tablas perfil, carro y diagnostico) y guarda los autos nuevos.
+// El seguimiento se actualiza en vivo cuando el mecánico cambia un diagnóstico (Supabase Realtime).
 import Image from "next/image";
-import Link from "next/link";
-import { useRef, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import Aviso, { mensajeDeFallo, type DatosAviso } from "@/components/Aviso";
 import BarraSuperior from "@/components/BarraSuperior";
-import SeguimientoEnVivo, { Muestra, type AutoSeguimiento } from "@/components/SeguimientoEnVivo";
+import BuscadorOpciones, { type Opcion } from "@/components/BuscadorOpciones";
+import SeguimientoEnVivo, { Muestra, type AutoSeguimiento, type Etapa } from "@/components/SeguimientoEnVivo";
 import { COLORES_Z06_2025, buscarColor } from "@/lib/colores";
+import { crearClienteNavegador } from "@/lib/supabase/cliente";
 
-const MAX_AUTOS = 3;
-// TODO: tomar el nombre del usuario con sesión iniciada.
-const USUARIO = { nombre: "Juan Pérez", iniciales: "JP" };
+const MAX_AUTOS = 20; // debe coincidir con el trigger carro_limite_autos de la base
 
+// Modelos que atiende el taller (se buscan en el combo "Modelo de tu auto"). Por ahora solo uno;
+// en la base el modelo es una constante (no hay columna). Para agregar otro, súmalo aquí y en la base.
+const MODELOS = [{ id: "chevrolet-corvette-z06-2025", marca: "Chevrolet", modelo: "Corvette Z06", anio: 2025 }];
+const OPCIONES_MODELO: Opcion[] = MODELOS.map((m) => ({
+  id: m.id,
+  etiqueta: `${m.marca} ${m.modelo} ${m.anio}`,
+  detalle: "Suspensión",
+}));
+
+type Usuario = { id: string; nombre: string; iniciales: string };
+// Auto ya guardado en la base (tabla carro). En la base el color se guarda con su nombre oficial.
+type AutoRegistrado = { id: string; placas: string; codigoColor: string; etapa: Etapa };
+// Auto que el cliente está capturando en el formulario (todavía no se guarda).
 type AutoForm = { id: string; placas: string; color: string };
 type ErroresAuto = { placas?: string; color?: string };
 
+const TEXTO_ETAPA: Record<Etapa, string> = {
+  registro: "Registro",
+  diagnostico: "Diagnóstico",
+  recibo: "Recibo pendiente",
+};
 
 const limpiarPlacas = (p: string) => p.toUpperCase().replace(/[^A-Z0-9]/g, "");
+const codigoDeNombre = (nombre: string) => COLORES_Z06_2025.find((c) => c.nombre === nombre)?.codigo ?? "";
+
+// Etapa del seguimiento según el último diagnóstico que el cliente puede ver (RLS oculta los borradores).
+function etapaDeDiagnosticos(diagnosticos: { estado: string; fecha_creacion: string }[]): Etapa {
+  if (diagnosticos.length === 0) return "diagnostico"; // registrado: espera la revisión del mecánico
+  return "recibo"; // ya tiene un diagnóstico enviado (o posterior)
+}
 
 export default function InicioPage() {
+  const router = useRouter();
   // Contador propio del componente para dar un id único a cada bloque de auto
   const siguienteId = useRef(1);
+  const [usuario, setUsuario] = useState<Usuario | null>(null);
+  const [registrados, setRegistrados] = useState<AutoRegistrado[]>([]);
   const [autos, setAutos] = useState<AutoForm[]>([{ id: "auto-0", placas: "", color: "" }]);
   const [errores, setErrores] = useState<Record<string, ErroresAuto>>({});
-  const [seleccionado, setSeleccionado] = useState<string>(autos[0].id);
-  const [enviado, setEnviado] = useState(false);
+  const [seleccionado, setSeleccionado] = useState<string>("auto-0");
+  const [aviso, setAviso] = useState<DatosAviso | null>(null);
+  const [guardando, setGuardando] = useState(false);
+  const [cargado, setCargado] = useState(false); // ya se leyeron los autos de la base
+  const [agregando, setAgregando] = useState(false); // el cliente pidió agregar otro auto
+  const [modeloId, setModeloId] = useState<string | null>(null); // modelo elegido en el buscador
+  const [errorModelo, setErrorModelo] = useState<string>();
+  const modeloElegido = MODELOS.find((m) => m.id === modeloId);
+
+  const disponibles = MAX_AUTOS - registrados.length;
+  // El formulario se muestra al cliente sin autos o cuando él decide agregar otro; nunca se le insiste.
+  const mostrarFormulario = cargado && disponibles > 0 && (registrados.length === 0 || agregando);
+  const formulario = mostrarFormulario ? autos.slice(0, disponibles) : [];
+
+  const cargar = useCallback(async () => {
+    try {
+      const supabase = crearClienteNavegador();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        router.replace("/login");
+        return;
+      }
+
+      const { data: perfil } = await supabase
+        .from("perfil")
+        .select("rol, nombre, apellido_paterno")
+        .eq("id_perfil", user.id)
+        .maybeSingle();
+      if (!perfil) {
+        router.replace("/login");
+        return;
+      }
+      if (perfil.rol === "mecanico") {
+        router.replace("/taller");
+        return;
+      }
+      setUsuario({
+        id: user.id,
+        nombre: `${perfil.nombre} ${perfil.apellido_paterno}`,
+        iniciales: `${perfil.nombre[0] ?? ""}${perfil.apellido_paterno[0] ?? ""}`.toUpperCase(),
+      });
+
+      const { data: carros, error } = await supabase
+        .from("carro")
+        .select("id_carro, placa, color, diagnostico ( estado, fecha_creacion )")
+        .eq("id_cliente", user.id)
+        .order("id_carro");
+      if (error) {
+        console.error("[TallerToGo] carros:", error);
+        setAviso({ tipo: "error", texto: "No se pudieron cargar tus autos. Recarga la página." });
+        return;
+      }
+      setRegistrados(
+        (carros ?? []).map((c) => ({
+          id: `carro-${c.id_carro}`,
+          placas: c.placa,
+          codigoColor: codigoDeNombre(c.color),
+          etapa: etapaDeDiagnosticos(c.diagnostico ?? []),
+        }))
+      );
+      setCargado(true);
+    } catch (fallo) {
+      setAviso({ tipo: "error", texto: mensajeDeFallo(fallo) });
+    }
+  }, [router]);
+
+  useEffect(() => {
+    // Seguimiento en vivo: se recarga cuando cambia algún diagnóstico visible para el cliente.
+    const supabase = crearClienteNavegador();
+    const canal = supabase
+      .channel("seguimiento-cliente")
+      .on("postgres_changes", { event: "*", schema: "public", table: "diagnostico" }, () => {
+        void cargar();
+      })
+      // La carga inicial se hace cuando el canal responde (conectado o con error),
+      // así los datos llegan aunque Realtime no esté disponible.
+      .subscribe(() => {
+        void cargar();
+      });
+    return () => {
+      void supabase.removeChannel(canal);
+    };
+  }, [cargar]);
 
   function cambiarCantidad(n: number) {
-    const cantidad = Math.min(MAX_AUTOS, Math.max(1, n));
+    const cantidad = Math.min(disponibles, Math.max(1, n));
     const nuevos =
-      cantidad > autos.length
+      cantidad > formulario.length
         ? [
-            ...autos,
-            ...Array.from({ length: cantidad - autos.length }, () => ({
+            ...formulario,
+            ...Array.from({ length: cantidad - formulario.length }, () => ({
               id: `auto-${siguienteId.current++}`,
               placas: "",
               color: "",
             })),
           ]
-        : autos.slice(0, cantidad);
+        : formulario.slice(0, cantidad);
     setAutos(nuevos);
-    if (!nuevos.some((a) => a.id === seleccionado)) setSeleccionado(nuevos[0].id);
-    setEnviado(false);
+    setAviso(null);
   }
 
   function actualizar(id: string, campo: "placas" | "color", valor: string) {
     setAutos((prev) => prev.map((a) => (a.id === id ? { ...a, [campo]: valor } : a)));
     setErrores((prev) => ({ ...prev, [id]: { ...prev[id], [campo]: undefined } }));
-    setEnviado(false);
+    setAviso(null);
   }
 
   function validar() {
     const e: Record<string, ErroresAuto> = {};
-    const vistas = new Set<string>();
-    for (const a of autos) {
+    const vistas = new Set<string>(registrados.map((r) => limpiarPlacas(r.placas)));
+    for (const a of formulario) {
       const placas = limpiarPlacas(a.placas);
       const err: ErroresAuto = {};
       if (!placas) err.placas = "Escribe las placas.";
@@ -69,21 +182,106 @@ export default function InicioPage() {
     return e;
   }
 
-  function registrar(evento: FormEvent<HTMLFormElement>) {
+  async function registrar(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
+    if (!usuario || formulario.length === 0) return;
     const e = validar();
     setErrores(e);
-    if (Object.keys(e).length > 0) return;
-    // TODO: guardar cada auto en Supabase (tabla vehicles) con customer_id, placas y color.
-    setEnviado(true);
+    setAviso(null);
+    const faltaModelo = !modeloElegido;
+    setErrorModelo(faltaModelo ? "Elige el modelo de tu auto." : undefined);
+    if (Object.keys(e).length > 0 || faltaModelo) {
+      setAviso({ tipo: "error", texto: "Revisa los datos marcados." });
+      return;
+    }
+
+    setGuardando(true);
+    try {
+      const supabase = crearClienteNavegador();
+      const cantidad = formulario.length;
+      const { error } = await supabase.from("carro").insert(
+        formulario.map((a) => ({
+          id_cliente: usuario.id,
+          placa: limpiarPlacas(a.placas),
+          color: buscarColor(a.color)!.nombre,
+        }))
+      );
+
+      if (error) {
+        console.error("[TallerToGo] insert carro:", error);
+        setAviso({
+          tipo: "error",
+          texto:
+            error.code === "23505"
+              ? "Alguna de estas placas ya está registrada."
+              : error.code === "P0001" || error.message.includes("hasta")
+                ? `Solo puedes registrar hasta ${MAX_AUTOS} autos.`
+                : "No se pudieron registrar los autos. Intenta de nuevo.",
+        });
+        return;
+      }
+
+      setAutos([{ id: `auto-${siguienteId.current++}`, placas: "", color: "" }]);
+      setAgregando(false);
+      setModeloId(null);
+      await cargar();
+      setAviso({
+        tipo: "exito",
+        texto: cantidad === 1 ? "¡Listo! Registramos tu auto." : `¡Listo! Registramos tus ${cantidad} autos.`,
+      });
+    } catch (fallo) {
+      setAviso({ tipo: "error", texto: mensajeDeFallo(fallo) });
+    } finally {
+      setGuardando(false);
+    }
   }
 
-  const autosSeguimiento: AutoSeguimiento[] = autos.map((a, i) => ({
-    id: a.id,
-    etiqueta: limpiarPlacas(a.placas) || `Auto ${i + 1}`,
-    hex: buscarColor(a.color)?.hex,
-    etapa: "registro",
-  }));
+  function abrirFormulario() {
+    setAutos([{ id: `auto-${siguienteId.current++}`, placas: "", color: "" }]);
+    setErrores({});
+    setModeloId(null);
+    setErrorModelo(undefined);
+    setAviso(null);
+    setAgregando(true);
+  }
+
+  function cancelarFormulario() {
+    setErrores({});
+    setAviso(null);
+    setAgregando(false);
+  }
+
+  async function salir() {
+    try {
+      await crearClienteNavegador().auth.signOut();
+    } finally {
+      router.push("/login");
+    }
+  }
+
+  // Seguimiento: primero los autos guardados y después los que se están capturando.
+  const autosSeguimiento: AutoSeguimiento[] = [
+    ...registrados.map((r) => ({
+      id: r.id,
+      etiqueta: r.placas,
+      hex: buscarColor(r.codigoColor)?.hex,
+      etapa: r.etapa,
+    })),
+    ...formulario.map((a, i) => ({
+      id: a.id,
+      etiqueta: limpiarPlacas(a.placas) || `Auto ${registrados.length + i + 1}`,
+      hex: buscarColor(a.color)?.hex,
+      etapa: "registro" as const,
+    })),
+  ];
+  const seleccionActual = autosSeguimiento.some((a) => a.id === seleccionado)
+    ? seleccionado
+    : (autosSeguimiento[0]?.id ?? "");
+  const nombreColorDe = (id: string) => {
+    const registrado = registrados.find((r) => r.id === id);
+    const codigo = registrado ? registrado.codigoColor : formulario.find((a) => a.id === id)?.color;
+    return buscarColor(codigo ?? "")?.nombre ?? "Sin color";
+  };
 
   return (
     <div className="flex min-h-screen flex-1 flex-col">
@@ -91,40 +289,83 @@ export default function InicioPage() {
         derecha={
           <div className="flex items-center gap-3 text-sm text-suave">
             <span className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-tinta text-[13px] font-semibold text-acento">
-              {USUARIO.iniciales}
+              {usuario?.iniciales ?? ""}
             </span>
-            {USUARIO.nombre}
-            <Link
-              href="/login"
-              className="ml-1 rounded-lg border border-borde bg-tarjeta px-3.5 py-2 font-semibold text-tinta hover:border-tinta"
+            {usuario?.nombre ?? "Cargando…"}
+            <button
+              type="button"
+              onClick={salir}
+              className="ml-1 cursor-pointer rounded-lg border border-borde bg-tarjeta px-3.5 py-2 font-semibold text-tinta hover:border-tinta"
             >
               Salir
-            </Link>
+            </button>
           </div>
         }
       />
 
-      <SeguimientoEnVivo autos={autosSeguimiento} seleccionado={seleccionado} onSeleccionar={setSeleccionado} />
+      {autosSeguimiento.length > 0 && (
+        <SeguimientoEnVivo autos={autosSeguimiento} seleccionado={seleccionActual} onSeleccionar={setSeleccionado} />
+      )}
 
       <main className="grid flex-1 grid-cols-[520px_1fr]">
         {/* Panel izquierdo: registro de autos */}
         <form onSubmit={registrar} noValidate className="border-r border-borde bg-tarjeta px-12 py-7">
-          <h1 className="font-titulo text-[28px] leading-none font-semibold">Registra tu auto</h1>
-          <p className="mt-2 text-sm text-suave">Por ahora el taller atiende solo este modelo.</p>
+          <h1 className="font-titulo text-[28px] leading-none font-semibold">
+            {registrados.length > 0 && !mostrarFormulario ? "Tus autos" : "Registra tu auto"}
+          </h1>
+          <p className="mt-2 text-sm text-suave">
+            Por ahora el taller atiende solo este modelo.
+            {registrados.length > 0 &&
+              (disponibles > 0
+                ? ` Tienes ${registrados.length} ${registrados.length === 1 ? "auto registrado" : "autos registrados"}.`
+                : ` Ya registraste el máximo de ${MAX_AUTOS} autos.`)}
+          </p>
 
-          <div className="mt-5 grid grid-cols-3 gap-2 rounded-[10px] border border-borde bg-fondo px-4 py-3.5">
-            {[
-              ["Marca", "Chevrolet"],
-              ["Modelo", "Corvette Z06"],
-              ["Año", "2025"],
-            ].map(([etiqueta, valor]) => (
-              <div key={etiqueta}>
-                <p className="text-xs text-suave">{etiqueta}</p>
-                <p className="font-semibold">{valor}</p>
-              </div>
-            ))}
-          </div>
+          {mostrarFormulario && (
+            <div className="mt-5">
+              <BuscadorOpciones
+                id="modelo"
+                etiqueta="Modelo de tu auto"
+                placeholder="Busca marca, modelo o año"
+                opciones={OPCIONES_MODELO}
+                valor={modeloId}
+                error={errorModelo}
+                onChange={(id) => {
+                  setModeloId(id);
+                  setErrorModelo(undefined);
+                  setAviso(null);
+                }}
+              />
+              {modeloElegido && (
+                <div className="mt-3 grid grid-cols-3 gap-2 rounded-[10px] border border-borde bg-fondo px-4 py-3.5">
+                  {[
+                    ["Marca", modeloElegido.marca],
+                    ["Modelo", modeloElegido.modelo],
+                    ["Año", String(modeloElegido.anio)],
+                  ].map(([etiqueta, valor]) => (
+                    <div key={etiqueta}>
+                      <p className="text-xs text-suave">{etiqueta}</p>
+                      <p className="font-semibold">{valor}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
+          {/* Cliente con autos: el formulario solo se abre si él lo pide */}
+          {cargado && registrados.length > 0 && disponibles > 0 && !mostrarFormulario && (
+            <button
+              type="button"
+              onClick={abrirFormulario}
+              className="mt-5 h-12 w-full cursor-pointer rounded-lg border border-borde bg-tarjeta font-titulo text-[17px] font-semibold tracking-wide text-tinta hover:border-tinta"
+            >
+              + Agregar otro auto
+            </button>
+          )}
+
+          {mostrarFormulario && (
+          <>
           <p id="cantidad-label" className="mt-5 text-sm font-semibold">
             ¿Cuántos autos vas a registrar?
           </p>
@@ -132,37 +373,39 @@ export default function InicioPage() {
             <div className="flex h-11 overflow-hidden rounded-lg border border-borde" role="group" aria-labelledby="cantidad-label">
               <button
                 type="button"
-                onClick={() => cambiarCantidad(autos.length - 1)}
-                disabled={autos.length <= 1}
+                onClick={() => cambiarCantidad(formulario.length - 1)}
+                disabled={formulario.length <= 1}
                 aria-label="Quitar un auto"
                 className="w-11 cursor-pointer text-xl disabled:cursor-default disabled:text-[#C9CBCF]"
               >
                 −
               </button>
               <span className="flex w-[52px] items-center justify-center border-x border-borde text-[17px] font-semibold" aria-live="polite">
-                {autos.length}
+                {formulario.length}
               </span>
               <button
                 type="button"
-                onClick={() => cambiarCantidad(autos.length + 1)}
-                disabled={autos.length >= MAX_AUTOS}
+                onClick={() => cambiarCantidad(formulario.length + 1)}
+                disabled={formulario.length >= disponibles}
                 aria-label="Agregar un auto"
                 className="w-11 cursor-pointer text-xl disabled:cursor-default disabled:text-[#C9CBCF]"
               >
                 +
               </button>
             </div>
-            <span className="text-[13px] text-suave">Máximo {MAX_AUTOS} autos</span>
+            <span className="text-[13px] text-suave">
+              Puedes registrar hasta {disponibles} {disponibles === 1 ? "auto más" : "autos más"}
+            </span>
           </div>
 
-          {autos.map((auto, i) => {
+          {formulario.map((auto, i) => {
             const err = errores[auto.id] ?? {};
             const color = buscarColor(auto.color);
             return (
               <fieldset key={auto.id} className="mt-3 rounded-[10px] border border-borde px-4 pt-1 pb-3.5">
                 <legend className="sr-only">Auto {i + 1}</legend>
                 <p className="mt-2.5 font-titulo text-[17px] font-semibold" aria-hidden="true">
-                  Auto {i + 1}
+                  Auto {registrados.length + i + 1}
                 </p>
                 <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3">
                   <div>
@@ -220,16 +463,29 @@ export default function InicioPage() {
           {/* Único botón de acento de la pantalla */}
           <button
             type="submit"
-            className="mt-6 h-12 w-full cursor-pointer rounded-lg bg-acento font-titulo text-[17px] font-semibold tracking-wide text-tinta transition hover:brightness-95 active:scale-[0.99]"
+            disabled={guardando || !usuario}
+            className="mt-6 h-12 w-full cursor-pointer rounded-lg bg-acento font-titulo text-[17px] font-semibold tracking-wide text-tinta transition hover:brightness-95 active:scale-[0.99] disabled:cursor-wait disabled:opacity-70"
           >
-            {autos.length === 1 ? "Registrar auto" : `Registrar ${autos.length} autos`}
+            {guardando
+              ? "Registrando…"
+              : formulario.length === 1
+                ? "Registrar auto"
+                : `Registrar ${formulario.length} autos`}
           </button>
-
-          {enviado && (
-            <p role="status" className="mt-4 rounded-lg border border-borde bg-fondo px-3 py-2 text-sm text-suave">
-              Datos listos. Falta conectar el registro de autos con Supabase.
-            </p>
+          {registrados.length > 0 && (
+            <button
+              type="button"
+              onClick={cancelarFormulario}
+              disabled={guardando}
+              className="mt-2.5 h-11 w-full cursor-pointer rounded-lg border border-borde bg-tarjeta font-semibold text-suave hover:border-tinta hover:text-tinta"
+            >
+              Cancelar
+            </button>
           )}
+          </>
+          )}
+
+          {aviso && <Aviso {...aviso} className="mt-4" />}
         </form>
 
         {/* Derecha: tarjeta de los autos */}
@@ -247,15 +503,17 @@ export default function InicioPage() {
             </div>
             <div className="px-6 py-5">
               <p className="flex items-center gap-2 text-[13px] text-suave">
-                {autos.length === 1 ? "Tu auto" : "Tus autos"}
-                <span className="rounded-full bg-tinta px-2.5 py-px text-xs font-semibold text-acento">{autos.length}</span>
+                {autosSeguimiento.length === 1 ? "Tu auto" : "Tus autos"}
+                <span className="rounded-full bg-tinta px-2.5 py-px text-xs font-semibold text-acento">
+                  {autosSeguimiento.length}
+                </span>
               </p>
-              <p className="mt-0.5 font-titulo text-2xl font-semibold">Chevrolet Corvette Z06 2025</p>
+              <p className="mt-0.5 font-titulo text-2xl font-semibold">{OPCIONES_MODELO[0].etiqueta}</p>
 
               <ul className="mt-3.5 flex flex-col gap-2">
-                {autosSeguimiento.map((a, i) => {
-                  const activo = a.id === seleccionado;
-                  const nombreColor = buscarColor(autos[i].color)?.nombre ?? "Sin color";
+                {autosSeguimiento.map((a) => {
+                  const activo = a.id === seleccionActual;
+                  const nombreColor = nombreColorDe(a.id);
                   return (
                     <li key={a.id}>
                       <button
@@ -272,7 +530,7 @@ export default function InicioPage() {
                           <span className="text-[13px] text-suave">{nombreColor}</span>
                         </span>
                         <span className="rounded-full border border-borde bg-fondo px-2.5 py-0.5 text-xs font-semibold">
-                          Registro
+                          {TEXTO_ETAPA[a.etapa]}
                         </span>
                       </button>
                     </li>

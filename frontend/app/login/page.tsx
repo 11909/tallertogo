@@ -1,11 +1,14 @@
 "use client";
 
 // Pantalla 1: Login (cliente y mecánico), diseñada para computadora
-// Por ahora es solo la pantalla. Falta conectar el inicio de sesión con Supabase Auth
-// y mandar a cada usuario a su parte según su rol (cliente o mecánico).
+// Inicia sesión con Supabase Auth y manda a cada usuario a su parte según su rol:
+// cliente → /inicio, mecánico → /taller (tabla perfil, ver docs/base-de-datos.md).
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import Aviso, { mensajeDeFallo, type DatosAviso } from "@/components/Aviso";
+import { crearClienteNavegador } from "@/lib/supabase/cliente";
 
 type Errores = { correo?: string; contrasena?: string };
 
@@ -16,7 +19,9 @@ export default function LoginPage() {
   const [contrasena, setContrasena] = useState("");
   const [verContrasena, setVerContrasena] = useState(false);
   const [errores, setErrores] = useState<Errores>({});
-  const [enviado, setEnviado] = useState(false);
+  const [aviso, setAviso] = useState<DatosAviso | null>(null);
+  const [cargando, setCargando] = useState(false);
+  const router = useRouter();
 
   function validar(): Errores {
     const e: Errores = {};
@@ -26,14 +31,57 @@ export default function LoginPage() {
     return e;
   }
 
-  function entrar(evento: FormEvent<HTMLFormElement>) {
+  async function entrar(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
     const e = validar();
     setErrores(e);
-    if (Object.keys(e).length > 0) return;
-    // TODO: supabase.auth.signInWithPassword({ email: correo, password: contrasena })
-    // y redirigir según el rol del usuario.
-    setEnviado(true);
+    setAviso(null);
+    if (Object.keys(e).length > 0) {
+      setAviso({ tipo: "error", texto: "Revisa los campos marcados." });
+      return;
+    }
+
+    setCargando(true);
+    try {
+      const supabase = crearClienteNavegador();
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: correo.trim().toLowerCase(),
+        password: contrasena,
+      });
+
+      if (error || !data.user) {
+        setAviso({
+          tipo: "error",
+          texto:
+            error?.message === "Email not confirmed"
+              ? "Tu correo todavía no está confirmado."
+              : "El correo o la contraseña no son correctos.",
+        });
+        return;
+      }
+
+      const { data: perfil, error: errorPerfil } = await supabase
+        .from("perfil")
+        .select("rol, nombre")
+        .eq("id_perfil", data.user.id)
+        .maybeSingle();
+
+      if (errorPerfil || !perfil) {
+        await supabase.auth.signOut();
+        setAviso({
+          tipo: "error",
+          texto: "Tu cuenta no terminó de registrarse. Vuelve a registrarte con el mismo correo y contraseña.",
+        });
+        return;
+      }
+
+      setAviso({ tipo: "exito", texto: `¡Hola, ${perfil.nombre}! Entrando…` });
+      router.push(perfil.rol === "mecanico" ? "/taller" : "/inicio");
+    } catch (fallo) {
+      setAviso({ tipo: "error", texto: mensajeDeFallo(fallo) });
+    } finally {
+      setCargando(false);
+    }
   }
 
   return (
@@ -88,7 +136,7 @@ export default function LoginPage() {
                 onChange={(e) => {
                   setCorreo(e.target.value);
                   setErrores((prev) => ({ ...prev, correo: undefined }));
-                  setEnviado(false);
+                  setAviso(null);
                 }}
                 aria-invalid={Boolean(errores.correo)}
                 aria-describedby={errores.correo ? "correo-error" : undefined}
@@ -112,7 +160,7 @@ export default function LoginPage() {
                   onChange={(e) => {
                     setContrasena(e.target.value);
                     setErrores((prev) => ({ ...prev, contrasena: undefined }));
-                    setEnviado(false);
+                    setAviso(null);
                   }}
                   aria-invalid={Boolean(errores.contrasena)}
                   aria-describedby={errores.contrasena ? "contrasena-error" : undefined}
@@ -135,16 +183,13 @@ export default function LoginPage() {
             {/* Único botón de acento de la pantalla */}
             <button
               type="submit"
-              className="mt-8 h-12 w-full cursor-pointer rounded-lg bg-acento font-titulo text-[17px] font-semibold tracking-wide text-tinta transition hover:brightness-95 active:scale-[0.99]"
+              disabled={cargando}
+              className="mt-8 h-12 w-full cursor-pointer rounded-lg bg-acento font-titulo text-[17px] font-semibold tracking-wide text-tinta transition hover:brightness-95 active:scale-[0.99] disabled:cursor-wait disabled:opacity-70"
             >
-              Entrar
+              {cargando ? "Entrando…" : "Entrar"}
             </button>
 
-            {enviado && (
-              <p role="status" className="mt-4 rounded-lg border border-borde bg-fondo px-3 py-2 text-sm text-suave">
-                Datos listos. Falta conectar el inicio de sesión con Supabase.
-              </p>
-            )}
+            {aviso && <Aviso {...aviso} className="mt-4" />}
           </form>
 
           <p className="mt-6 text-center text-sm text-suave">
@@ -153,7 +198,7 @@ export default function LoginPage() {
               Crear cuenta
             </Link>
           </p>
-          <p className="mt-2 text-center text-sm text-suave">Los mecánicos entran con la cuenta del taller.</p>
+          <p className="mt-2 text-center text-sm text-suave">Clientes y trabajadores del taller entran aquí.</p>
         </div>
       </section>
     </main>

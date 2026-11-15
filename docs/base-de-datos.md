@@ -17,8 +17,9 @@ Modelo de datos de TallerToGo: modelo E-R, paso a tablas, diccionario de datos, 
 ## 1. Reglas que respeta el modelo
 
 - Un solo taller, especializado en suspensión, y un solo auto de demo: **Chevrolet Corvette Z06 2025** (C8), sin Front Lift. Marca, modelo y año del auto son constantes de la app, no columnas.
-- Login con rol: `cliente` o `mecanico`. Solo hay una cuenta de mecánico, creada a mano.
-- Hasta **3 autos por cliente**, cada uno con placa única y uno de los **10 colores de fábrica** del Z06 2025. No se pide VIN. Cada auto tiene sus propios diagnósticos, órdenes y seguimiento.
+- Login con rol: `cliente` o `mecanico`. Los dos se registran en la pantalla de registro; el botón "Trabajador" guarda `rol = 'mecanico'`. Solo los clientes registran autos.
+- Un cliente puede **eliminar un auto solo si el mecánico todavía no empieza su diagnóstico** (ni siquiera un borrador). Como las órdenes y los tickets cuelgan del diagnóstico, ese auto tampoco tiene órdenes ni tickets. Lo decide la función `eliminar_carro`.
+- Hasta **20 autos por cliente**, cada uno con placa única y uno de los **10 colores de fábrica** del Z06 2025. No se pide VIN. Cada auto tiene sus propios diagnósticos, órdenes y seguimiento.
 - 42 piezas-posición del catálogo (`docs/catalogo-suspension-corvette-z06.md`), cada una independiente (`SUS-DEL-05-IZQ` y `SUS-DEL-05-DER` son piezas distintas). Todas pertenecen al sistema Suspensión; la tabla `sistema` deja listo agregar otros.
 - Dos marcas de refacción, **OEM** y **GM**, cada pieza con su precio en cada marca (84 precios). Demo: OEM = 2 ¢, GM = 1 ¢, mano de obra = 1 ¢ por falla.
 - El mecánico registra cada **falla** (una pieza-posición defectuosa) con su descripción y su mano de obra. Una pieza-posición aparece a lo más una vez por diagnóstico.
@@ -47,7 +48,7 @@ Especialización Usuario → {Cliente, Mecánico}: disjunta y total.
 
 | Relación | Entidades | Cardinalidad | Participación | Atributos de la relación |
 | --- | --- | --- | --- | --- |
-| posee | Cliente – Carro | 1:N (máximo 3) | Carro total | — |
+| posee | Cliente – Carro | 1:N (máximo 20) | Carro total | — |
 | recibe | Carro – Diagnóstico | 1:N | Diagnóstico total | — |
 | realiza | Mecánico – Diagnóstico | 1:N | Diagnóstico total | — |
 | registra | Diagnóstico – Falla | 1:N | Falla total | — |
@@ -82,7 +83,7 @@ Tipos de PostgreSQL. **PK** = llave primaria, **FK** = llave foránea, **UQ** = 
 | Columna | Tipo | Nulo | Llave | Descripción |
 | --- | --- | --- | --- | --- |
 | id_perfil | uuid | no | PK, FK → `auth.users.id` | Mismo id que el usuario de Supabase Auth (`auth.uid()`, `user.id`) |
-| rol | varchar(8) | no | | `'cliente'` o `'mecanico'` |
+| rol | varchar(8) | no | | `'cliente'` o `'mecanico'` ("Trabajador" en la pantalla de registro) |
 | nombre | varchar(60) | no | | |
 | apellido_paterno | varchar(60) | no | | |
 | apellido_materno | varchar(60) | sí | | |
@@ -98,7 +99,7 @@ Tipos de PostgreSQL. **PK** = llave primaria, **FK** = llave foránea, **UQ** = 
 | placa | varchar(10) | no | UQ | |
 | color | varchar(40) | no | | Uno de los 10 colores de fábrica (`check`): Arctic White, Black, Competition Yellow Tintcoat Metallic, Hysteria Purple Metallic, Rapid Blue, Red Mist Metallic Tintcoat, Riptide Blue Metallic, Sea Wolf Gray Tricoat, Sebring Orange Tintcoat, Torch Red |
 
-Marca, modelo y año: constantes de la app (Chevrolet Corvette Z06 2025). Máximo 3 autos por cliente (política RLS `carro_registrar`).
+Marca, modelo y año: constantes de la app (Chevrolet Corvette Z06 2025). Máximo 20 autos por cliente (trigger `carro_limite_autos`) y solo clientes (política RLS `carro_registrar`).
 
 ### sistema — sistemas del auto
 
@@ -255,6 +256,8 @@ El nombre de la restricción sigue la convención de PostgreSQL (`<tabla>_<colum
 | `crear_orden(p_folio int, p_lineas jsonb)` | función (RPC) | cliente, **con su sesión** (usa `auth.uid()`) | Valida que el diagnóstico sea suyo y esté en `enviado` o `pagado`, cancela un QR pendiente anterior, rechaza fallas ya pagadas, calcula el monto y crea la orden con sus líneas. Devuelve `id_orden`. `p_lineas = [{ "id_falla": 7, "id_marca": 1 }, …]` |
 | `registrar_pago(p_codi_qr_id, p_transaction_id, p_monto_centavos, p_fecha_pago)` | función | solo el servidor (service role), desde el webhook | Devuelve `'pagado'`, `'repetido'`, `'rechazado'` o `'desconocido'` |
 | `es_mecanico()` | función | políticas RLS | `true` si el usuario actual es el mecánico |
+| `carros_eliminables()` | función (RPC) | cliente | Devuelve los `id_carro` del cliente que todavía se pueden eliminar (sin ningún diagnóstico, incluidos los borradores que el cliente no ve) |
+| `eliminar_carro(p_id_carro int)` | función (RPC) | cliente | Elimina el auto si es suyo y no tiene diagnóstico. Si no se puede, falla con `hint` = `'con_diagnostico'` o `'no_encontrado'` |
 
 Las vistas usan `security_invoker`, así que respetan RLS: cada quien ve solo lo suyo.
 
@@ -278,28 +281,43 @@ const { data: perfil } = await supabase
 // perfil.rol === 'mecanico' → pantallas del mecánico; 'cliente' → pantallas del cliente
 ```
 
-**Registro de cliente**
+**Registro (Cliente o Trabajador)** — implementado en `app/registro/page.tsx`
 
-| Dato del formulario | Columna |
+| Campo del formulario | Dónde se guarda |
 | --- | --- |
-| Correo, contraseña | `auth.signUp` (y el correo también en `perfil.correo`) |
-| Nombre, apellidos, teléfono | `perfil.nombre`, `apellido_paterno`, `apellido_materno`, `telefono` |
+| "¿Qué eres?": Cliente / Trabajador | `perfil.rol`: `'cliente'` / `'mecanico'` |
+| Nombre(s) | `perfil.nombre` |
+| Apellido paterno | `perfil.apellido_paterno` |
+| Apellido materno (opcional) | `perfil.apellido_materno` |
+| Correo | `auth.users` (Supabase Auth) y `perfil.correo` |
+| Teléfono (10 dígitos) | `perfil.telefono` |
+| Contraseña | **Solo** en `auth.users`, cifrada por Supabase Auth. No hay columna de contraseña en `perfil` a propósito |
 
 ```js
-const { data: { user } } = await supabase.auth.signUp({ email, password });
+const { data } = await supabase.auth.signUp({ email: correo, password: contrasena });
 await supabase.from('perfil').insert({
-  id_perfil: user.id, rol: 'cliente', nombre, apellido_paterno, apellido_materno,
-  correo: email, telefono,
+  id_perfil: data.user.id,
+  rol: rol === 'trabajador' ? 'mecanico' : 'cliente',
+  nombre, apellido_paterno, apellido_materno: apellido_materno || null,
+  correo, telefono: telefono.replace(/\D/g, ''),
 });
 ```
 
-La política RLS exige que exista la sesión al insertar el perfil. Para la demo, desactiven la confirmación de correo en la configuración de Auth de Supabase; si no, `signUp` no deja sesión y el `insert` falla.
+Si el correo ya existe en Auth pero no tiene perfil (un registro que se quedó a medias), la pantalla entra con la misma contraseña y completa el perfil.
+
+La política RLS `perfil_registrar` solo deja crear el perfil propio, con rol `cliente` o `mecanico`, y exige que exista la sesión al insertarlo. Para la demo, desactiven la confirmación de correo en la configuración de Auth de Supabase; si no, `signUp` no deja sesión y el `insert` falla.
 
 **Registro de auto**
 
 ```js
-// color: uno de los 10 colores de fábrica; un 4.º auto lo rechaza RLS
+// color: uno de los 10 colores de fábrica; el auto 21 lo rechaza el trigger carro_limite_autos (código P0001)
 await supabase.from('carro').insert({ id_cliente: user.id, placa, color });
+
+// Eliminar: mostrar el botón solo en los autos que devuelve carros_eliminables()
+const { data: ids } = await supabase.rpc('carros_eliminables');            // p. ej. [4, 7]
+const { error } = await supabase.rpc('eliminar_carro', { p_id_carro: 4 });
+// error.hint === 'con_diagnostico' → el mecánico ya empezó el diagnóstico (no se puede eliminar)
+// Un DELETE directo sobre carro no borra nada: no hay política RLS de borrado.
 // Marca, modelo y año se muestran fijos: Chevrolet Corvette Z06 2025
 ```
 
@@ -479,7 +497,7 @@ create table perfil (
 );
 
 -- El modelo es fijo en la demo: Chevrolet Corvette Z06 2025 (C8), sin Front Lift.
--- Hasta 3 autos por cliente (se valida en la política carro_registrar). Sin VIN.
+-- Hasta 20 autos por cliente (se valida con el trigger carro_limite_autos). Sin VIN.
 create table carro (
   id_carro    int generated always as identity primary key,
   id_cliente  uuid not null references perfil(id_perfil),
@@ -490,6 +508,21 @@ create table carro (
                 'Riptide Blue Metallic', 'Sea Wolf Gray Tricoat', 'Sebring Orange Tintcoat',
                 'Torch Red'))
 );
+
+-- Máximo 20 autos por cliente. Es un trigger (y no solo RLS) porque revisa auto por auto,
+-- incluso cuando se insertan varios en una sola operación.
+create or replace function validar_limite_autos() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  perform pg_advisory_xact_lock(hashtext(new.id_cliente::text));   -- evita carreras entre dos registros
+  if (select count(*) from carro where id_cliente = new.id_cliente) >= 20 then
+    raise exception 'Solo puedes registrar hasta 20 autos' using errcode = 'P0001';
+  end if;
+  return new;
+end $$;
+
+create trigger carro_limite_autos before insert on carro
+  for each row execute function validar_limite_autos();
 
 create table sistema (
   id_sistema  smallint generated always as identity primary key,
@@ -618,7 +651,7 @@ select p.id_pieza, m.id_marca, p.nombre || ' ' || m.nombre,
 from pieza p cross join marca_refaccion m;
 ```
 
-La cuenta del mecánico se crea a mano: primero el usuario en Supabase Auth y después su fila en `perfil` con `rol = 'mecanico'`.
+Los mecánicos se registran desde la pantalla de registro eligiendo "Trabajador".
 
 ### Paso 3: funciones de pago
 
@@ -763,14 +796,13 @@ alter table orden_detalle   enable row level security;
 -- Perfil: cada quien ve el suyo; todos ven al mecánico; el mecánico ve a todos
 create policy perfil_ver on perfil for select
   using (id_perfil = auth.uid() or rol = 'mecanico' or es_mecanico());
-create policy perfil_registrar on perfil for insert         -- el mecánico se crea a mano
-  with check (id_perfil = auth.uid() and rol = 'cliente');
+create policy perfil_registrar on perfil for insert         -- cliente o mecánico ("Trabajador")
+  with check (id_perfil = auth.uid() and rol in ('cliente','mecanico'));
 
 create policy carro_ver on carro for select
   using (id_cliente = auth.uid() or es_mecanico());
-create policy carro_registrar on carro for insert           -- máximo 3 autos por cliente
-  with check (id_cliente = auth.uid()
-              and (select count(*) from carro c where c.id_cliente = auth.uid()) < 3);
+create policy carro_registrar on carro for insert           -- solo clientes (el límite de 20 lo valida un trigger)
+  with check (id_cliente = auth.uid() and not es_mecanico());
 
 -- Catálogo: solo lectura
 create policy sistema_ver on sistema       for select using (true);
@@ -805,6 +837,41 @@ create policy detalle_ver on orden_detalle for select
 
 -- Seguimiento en vivo
 alter publication supabase_realtime add table diagnostico, orden;
+```
+
+### Paso 6: eliminar autos
+
+```sql
+-- Eliminar autos: solo el dueño y solo si el mecánico todavía no empieza ningún diagnóstico
+-- (ni siquiera un borrador). Las órdenes de pago y los tickets cuelgan del diagnóstico,
+-- así que un auto sin diagnóstico tampoco tiene órdenes ni tickets.
+
+-- Ids de los autos del cliente que todavía se pueden eliminar (incluye los borradores que el
+-- cliente no ve, por eso es security definer).
+create or replace function carros_eliminables() returns int[]
+language sql stable security definer set search_path = public as $$
+  select coalesce(array_agg(c.id_carro order by c.id_carro), '{}')
+    from carro c
+   where c.id_cliente = auth.uid()
+     and not exists (select 1 from diagnostico d where d.id_carro = c.id_carro);
+$$;
+
+create or replace function eliminar_carro(p_id_carro int) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  -- Bloquea el auto: si el mecánico crea un diagnóstico al mismo tiempo, una de las dos operaciones espera.
+  perform 1 from carro where id_carro = p_id_carro and id_cliente = auth.uid() for update;
+  if not found then
+    raise exception 'Auto no encontrado' using errcode = 'P0001', hint = 'no_encontrado';
+  end if;
+  if exists (select 1 from diagnostico where id_carro = p_id_carro) then
+    raise exception 'El mecánico ya empezó el diagnóstico de este auto' using errcode = 'P0001', hint = 'con_diagnostico';
+  end if;
+  delete from carro where id_carro = p_id_carro;
+end $$;
+
+revoke execute on function carros_eliminables(), eliminar_carro(int) from public, anon;
+grant execute on function carros_eliminables(), eliminar_carro(int) to authenticated;
 ```
 
 ## 10. Pendientes

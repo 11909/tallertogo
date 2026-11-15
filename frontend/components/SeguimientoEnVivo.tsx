@@ -33,7 +33,7 @@ export default function SeguimientoEnVivo({
             Seguimiento en vivo
           </p>
           {autos.length > 1 && (
-            <div className="flex gap-1.5" role="tablist" aria-label="Elige un auto">
+            <div className="flex max-w-[460px] flex-wrap gap-1.5" role="tablist" aria-label="Elige un auto">
               {autos.map((a) => {
                 const activo = a.id === auto?.id;
                 return (
