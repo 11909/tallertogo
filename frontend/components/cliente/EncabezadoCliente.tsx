@@ -8,12 +8,12 @@ import { useCliente } from "@/components/cliente/EstadoCliente";
 
 export default function EncabezadoCliente() {
   const ruta = usePathname();
-  const { usuario, piezasEnCarrito, ordenes, estadoOrden, salir } = useCliente();
-  const pendientes = ordenes.filter((o) => estadoOrden(o) !== "pagado").length;
+  const { usuario, carrito, pedidos, salir } = useCliente();
+  const pendientes = pedidos.filter((p) => p.estado === "pendiente" || p.estado === "vencido").length;
 
   const pestanas = [
     { href: "/autos", etiqueta: "Mis autos" },
-    { href: "/carrito", etiqueta: "Carrito", contador: piezasEnCarrito },
+    { href: "/carrito", etiqueta: "Carrito", contador: carrito.length },
     { href: "/pagos", etiqueta: "Pagos", contador: pendientes },
   ];
 
@@ -31,10 +31,10 @@ export default function EncabezadoCliente() {
               }`}
             >
               <span className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-tinta text-[13px] font-semibold text-acento">
-                {usuario.iniciales}
+                {usuario?.iniciales ?? ""}
               </span>
               <span className="leading-tight">
-                <span className="block font-semibold text-tinta">{usuario.nombre}</span>
+                <span className="block font-semibold text-tinta">{usuario?.nombre ?? "Cargando…"}</span>
                 <span className="text-xs">Cliente · Mi perfil</span>
               </span>
             </Link>

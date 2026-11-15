@@ -12,9 +12,17 @@ Responde siempre en español.
 - `docs/`: `catalogo-suspension-corvette-z06.md`, `contexto-proyecto.md` y `base-de-datos.md` (ver sección 2).
 - `frontend/`: app en **Next.js 16** (App Router) + TypeScript + Tailwind CSS 4. Para correrla: `cd frontend`, `npm install` y `npm run dev` (abre en http://localhost:3000).
   - `app/page.tsx`: redirige a `/login`.
-  - `app/login/page.tsx` (pantalla 1, login): conectada a Supabase Auth; manda a `/inicio` (cliente) o `/taller` (mecánico) según el rol.
+  - `app/login/page.tsx` (pantalla 1, login): conectada a Supabase Auth; manda al cliente con autos a `/autos`, al cliente sin autos a `/inicio` y al mecánico a `/taller`.
   - `app/registro/page.tsx` (pantalla 2, registro de **Cliente** o **Trabajador**): conectada a Supabase Auth y a `perfil`. Pide nombre, apellidos, correo, teléfono y contraseña; "Trabajador" se guarda como `rol = 'mecanico'`.
-  - `app/inicio/page.tsx` (pantalla 3, inicio del cliente): lee el usuario y sus autos de Supabase, busca el modelo con un combo con buscador, registra hasta 20 autos (el formulario solo se abre si el cliente elige "Agregar otro auto"), elimina autos sin diagnóstico y actualiza el seguimiento en vivo.
+  - `app/inicio/page.tsx` (pantalla 3, inicio del cliente): lee el usuario y sus autos de Supabase, busca el modelo con un combo con buscador, registra hasta 20 autos (el formulario solo se abre si el cliente elige "Agregar otro auto") y elimina autos sin diagnóstico. Con al menos un auto, "Terminar registro" lleva a `/autos`. El seguimiento en vivo ya no está aquí: se ve en el diagnóstico de cada auto.
+  - `app/(cliente)/` (pantallas del cliente, con pestañas **Mis autos | Carrito | Pagos** y el estado compartido en `components/cliente/EstadoCliente.tsx`):
+    - `autos/page.tsx`: grid de autos (imagen, color, modelo, placa con formato de placa y seguimiento en vivo).
+    - `autos/[id]/`: diagnóstico de un auto (`id` = `id_carro`). Para ver otro auto se regresa a la grid.
+    - `carrito/page.tsx`: carrito agrupado por auto; avisa cuántos QR se generarán antes de confirmar.
+    - `pagos/`: pedidos pendientes y pagados, con todos sus QR (también los vencidos) y el ticket.
+    - `perfil/page.tsx`: Mi perfil del cliente (se abre desde su nombre en la barra superior); para guardar necesita el **paso 8** de `docs/base-de-datos.md`.
+  - `lib/cliente/`: capa de datos del cliente. `tipos.ts` (forma de la base), `formato.ts`, `fuenteSupabase.ts` (consultas reales) y `fuente.ts`, que elige la fuente: con `NEXT_PUBLIC_DATOS_CLIENTE=supabase` en `.env.local` usa Supabase (requiere el **paso 9** de `docs/base-de-datos.md`); si no, usa la demo en memoria de `lib/clienteDemo.ts`.
+  - `app/carrito/[id]/`: ruta vieja (un carrito por auto); redirige a `/carrito`. `Carrito.tsx` ya no se usa y se puede borrar.
   - `app/taller/page.tsx` (pantalla 4, autos por atender del mecánico): usa datos de ejemplo; falta leerlos de Supabase y guardar los cambios de etapa.
   - `components/BarraSuperior.tsx`: barra superior común.
   - `components/Aviso.tsx`: mensajes de confirmación y de error que usan todas las pantallas.
@@ -22,7 +30,7 @@ Responde siempre en español.
   - `lib/supabase/`: clientes de Supabase (`cliente.ts` navegador, `servidor.ts` servidor con sesión, `admin.ts` solo servidor con la llave secreta).
   - `components/SeguimientoEnVivo.tsx`: franja de seguimiento por auto (pastillas con las placas); después se conectará a Supabase Realtime.
   - `AGENTS.md`: Next.js 16 trae cambios; antes de escribir código hay que leer las guías en `node_modules/next/dist/docs/`.
-- **Faltan:** las pantallas de diagnóstico del mecánico, diagnóstico y carrito del cliente, pago con QR y ticket, y la conexión con Supabase y pey.
+- **Faltan:** conectar las pantallas del mecánico con Supabase, correr el paso 9 en Supabase para activar los datos reales del cliente, y la conexión con pey (pedir el QR y el webhook).
 - Algunos `TODO` del código nombran tablas en inglés (`profiles`, `vehicles`, `customer_id`). En la base se llaman `perfil`, `carro` e `id_cliente`: usa siempre los nombres de `docs/base-de-datos.md`.
 
 ## 1. Qué es
@@ -69,7 +77,11 @@ No se agregan otros lenguajes ni frameworks. Se descartó Python/Django para no 
 - **Turnos del taller:** el mecánico **diagnostica por orden de llegada** (hora de registro del auto, `carro.fecha_registro`) y **repara por orden de pago** (`orden.fecha_pago`). En la lista del mecánico, el turno 1 de diagnóstico lleva el botón amarillo y el turno 1 de reparación la etiqueta "Siguiente".
 - **Descripción general:** el mecánico escribe una sola descripción por diagnóstico (`diagnostico.descripcion`), obligatoria para enviarlo. La línea de tiempo guarda la hora de cada etapa (`fecha_envio`, `fecha_reparacion`, `fecha_listo`, `fecha_entrega`).
 - **El cliente solo puede comprar las piezas que diagnosticó el mecánico.** No puede agregar piezas por su cuenta.
-- **Compras parciales:** el cliente compra desde la vista del diagnóstico y puede pagarlo en **varias órdenes** (mientras el diagnóstico esté en `enviado` o `pagado`), pero **cada falla se compra una sola vez**. Si deja fallas sin elegir, la app muestra un modal de confirmación ("Aún te faltan piezas del diagnóstico por comprar; podrás pagarlas después"). Con el diagnóstico en `en_reparacion`, las fallas sin comprar quedan como no compradas.
+- **Carrito:** cuando el mecánico envía el diagnóstico, **todas sus fallas entran solas al carrito** con OEM. El cliente cambia la marca de cada pieza u **omite** las que no quiere reparar. El carrito y las omisiones viven solo en el navegador; en la base solo existen las órdenes.
+- **Compras parciales:** el cliente puede pagar un diagnóstico en **varias órdenes** (mientras esté en `enviado` o `pagado`), pero **cada falla se compra una sola vez**. Si deja fallas sin comprar, la app muestra un modal de confirmación ("Aún te faltan piezas del diagnóstico por comprar; podrás pagarlas después"). Las piezas que compra después generan **un QR aparte**: un QR nuevo **no cancela** a otro que siga vigente. Con el diagnóstico en `en_reparacion`, las fallas sin comprar quedan como no compradas.
+- **Un QR por auto:** cada diagnóstico se paga con sus propias órdenes, así que un carrito con varios autos genera un QR por auto. El carrito lo avisa antes de confirmar.
+- **Cerrar / reabrir diagnóstico (cliente):** con el diagnóstico en `enviado` o `pagado`, el cliente puede **cerrarlo**: las piezas que omitió quedan sin comprar y ya no se le ofrecen. Puede **reabrirlo** para comprarlas después (vuelven a su carrito y se pagan en un QR aparte). Se guarda en `diagnostico.cerrado` con la función `cambiar_cierre_diagnostico`; no cambia el estado del diagnóstico ni lo que ve el mecánico.
+- **Historial de QR (pedido):** un QR vence a los 10 min. Al generar uno nuevo para las mismas piezas (`regenerar_qr`), la orden nueva guarda en `id_pedido` la orden original. En Pagos se muestran **todos los QR de cada pedido**, también los vencidos. Las líneas de una orden vencida o rechazada no se borran: se marcan `activa = false`.
 - El cliente **solo ve diagnósticos enviados** (no los borradores) y solo de sus autos.
 - **El servidor calcula el total.** Nunca se confía en precios ni cantidades que vengan del navegador.
 - **Solo la confirmación de pey (webhook) marca una orden como pagada**, después de verificar firma, monto y vigencia. Un pago repetido se ignora. **No hay reembolsos:** un pago a un QR cancelado o vencido, tardío o con un monto distinto se marca como `rechazado` (queda registrado, pero no se aplica).
@@ -80,7 +92,7 @@ No se agregan otros lenguajes ni frameworks. Se descartó Python/Django para no 
 | Entidad | Flujo | Quién lo cambia |
 | --- | --- | --- |
 | Diagnóstico | borrador → enviado → pagado → en_reparacion → listo → entregado | El mecánico; `pagado` lo pone solo la confirmación de pey (con el primer pago) |
-| Orden | pendiente → pagado / expirado / rechazado | Solo el servidor. `expirado` incluye el QR que se cancela al generar otro |
+| Orden | pendiente → pagado / expirado / rechazado | Solo el servidor. `expirado` = el QR venció (10 min) o se reemplazó con `regenerar_qr` |
 
 El **seguimiento en vivo** que ve el cliente es el estado del diagnóstico desde `enviado`, actualizado en tiempo real con Supabase Realtime. Se muestra **por auto**: en la franja de seguimiento, el cliente elige con pastillas (las placas) de qué auto ve el avance.
 
@@ -146,11 +158,13 @@ Los ganadores se anuncian por correo.
   - Formulario de diagnóstico: una **descripción general de la falla** por diagnóstico; se eligen pieza-posición del catálogo (con buscador y filtros por eje y lado) y se captura la **mano de obra de cada falla**.
   - Cada diagnóstico tiene un **folio** (`DG-00000`) que se asigna al empezar. Las pantallas del mecánico muestran placas, color y folio, **no** los datos del cliente.
   - Botón "Enviar diagnóstico" y botones para avanzar el estado de la reparación.
-- **Cliente:**
-  - Diagnóstico con las fallas y la ubicación de cada pieza.
-  - Selector OEM/GM por pieza y carrito con el total (piezas + mano de obra).
-- **Pago:** pantalla con el QR CoDi, que espera la confirmación del pago.
-- **Seguimiento:** estado de la reparación en vivo.
+- **Cliente** (pestañas Mis autos | Carrito | Pagos):
+  - **Mis autos:** grid con imagen, color, modelo, placa y seguimiento en vivo de cada auto, y un botón para registrar otro.
+  - **Diagnóstico** de un auto: mecánico que lo hizo, seguimiento en vivo, descripción general y cada falla como pestaña colapsable con su ubicación, su mano de obra y los proveedores (OEM y GM) con su precio. Botones "Omitir esta pieza" y "Cerrar / Reabrir diagnóstico".
+  - **Carrito** agrupado por auto, con selector OEM/GM por pieza, total de piezas, total de mano de obra y total a pagar. Antes de confirmar avisa cuántos QR se generarán.
+- **Pago:** el QR CoDi se genera al confirmar el carrito y se ve en la pestaña Pagos con su cuenta regresiva. Si vence, se genera otro desde ahí.
+- **Pagos:** secciones Pendientes y Pagados, con todos los QR de cada pedido (también los vencidos). El ticket (solo órdenes pagadas) lleva cliente, mecánico, auto, piezas por proveedor con su precio, subtotal de piezas, subtotal de mano de obra y total.
+- **Seguimiento:** estado de la reparación en vivo, dentro del diagnóstico de cada auto.
 
 ## 9. Flujo de Git
 

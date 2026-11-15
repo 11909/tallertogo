@@ -1,64 +1,67 @@
 "use client";
 
-// Pagos del cliente, en dos secciones:
-// - Pendientes: QR CoDi por pagar (con cuenta regresiva) y QR vencidos, que se pueden generar de nuevo.
-// - Pagados: los tickets (solo de órdenes que pey confirmó).
-// La orden abierta se guarda en la URL (?orden=ID) para que el QR o el ticket se puedan abrir desde otras pantallas.
-// TODO (conexión con la BD): leer `orden` del cliente y escuchar su cambio a 'pagado' / 'expirado' con Realtime.
+// Pagos del cliente. Un "pedido" junta todos los QR que se generaron para las mismas piezas: si un QR vence,
+// el nuevo QR queda en el mismo pedido y se ven todos, también los vencidos.
+// - Pendientes: pedidos con un QR vigente o con el último QR vencido / rechazado.
+// - Pagados: pedidos con su ticket (solo órdenes que pey confirmó) y el historial de sus QR.
+// La orden abierta va en la URL (?orden=ID) para poder abrir un QR o ticket desde otras pantallas.
+// Datos: v_orden_cliente (una fila por línea de cada orden) y RPC regenerar_qr.
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
+import Aviso from "@/components/Aviso";
 import CodigoQR from "@/components/cliente/CodigoQR";
 import { TituloPantalla } from "@/components/cliente/EncabezadoCliente";
-import { useCliente } from "@/components/cliente/EstadoCliente";
+import { EstadoCarga, useCliente, type Pedido } from "@/components/cliente/EstadoCliente";
 import Modal from "@/components/cliente/Modal";
 import { BOTON_ACENTO, BOTON_BORDE, Icono, Placa } from "@/components/cliente/Piezas";
 import Ticket from "@/components/cliente/Ticket";
 import { Muestra } from "@/components/SeguimientoEnVivo";
-import { AUTOS_CLIENTE, dinero, fechaHora, folioOrden, formatoPlaca, totalesOrden, type Orden } from "@/lib/clienteDemo";
-import { buscarColor } from "@/lib/colores";
+import { dinero, fechaHora, folioDiagnostico, folioOrden, formatoPlaca, plural, restante } from "@/lib/cliente/formato";
+import type { OrdenCliente } from "@/lib/cliente/tipos";
+import { COLORES_Z06_2025 } from "@/lib/colores";
+
+const colorHex = (nombre: string) => COLORES_Z06_2025.find((c) => c.nombre === nombre)?.hex;
 
 export default function Pagos() {
   const router = useRouter();
   const params = useSearchParams();
-  const { ordenes, estadoOrden, ahora, usuario } = useCliente();
-  const abierta = ordenes.find((o) => String(o.id) === params.get("orden"));
+  const { pedidos, ordenes, autos, usuario } = useCliente();
+  const abierta = ordenes.find((o) => String(o.idOrden) === params.get("orden"));
 
   const abrir = (id: number) => router.replace(`/pagos?orden=${id}`, { scroll: false });
   const cerrar = () => router.replace("/pagos", { scroll: false });
 
-  // Pendientes: QR vigentes, y el último QR vencido de cada auto (los reemplazados por uno nuevo ya no se muestran)
-  const pendientes = ordenes.filter((o) => {
-    const estado = estadoOrden(o);
-    if (estado === "pendiente") return true;
-    if (estado !== "expirado") return false;
-    return !ordenes.some((otra) => otra.autoId === o.autoId && otra.id > o.id && otra.estado !== "pagado");
-  });
-  const pagados = ordenes
-    .filter((o) => o.estado === "pagado")
-    .sort((a, b) => (b.pagadaEn ?? "").localeCompare(a.pagadaEn ?? ""));
+  const pendientes = pedidos
+    .filter((p) => p.estado === "pendiente" || p.estado === "vencido" || p.estado === "rechazado")
+    .sort((a, b) => b.ultimo.idOrden - a.ultimo.idOrden);
+  const pagados = pedidos
+    .filter((p) => p.estado === "pagado")
+    .sort((a, b) => (b.pagada?.pagadaEn ?? "").localeCompare(a.pagada?.pagadaEn ?? ""));
+  const resueltos = pedidos.filter((p) => p.estado === "resuelto");
+
+  const mecanicoDe = (o: OrdenCliente) => {
+    const d = autos.find((a) => a.idCarro === o.idCarro)?.diagnostico;
+    return d?.folio === o.folio ? d.mecanico : "";
+  };
 
   return (
     <>
-      <TituloPantalla etiqueta="Historial" titulo="Pagos" texto="Tus códigos QR por pagar y los tickets de lo que ya pagaste." />
+      <TituloPantalla etiqueta="Historial" titulo="Pagos" texto="Tus códigos QR por pagar, los que vencieron y los tickets de lo que ya pagaste." />
+      <EstadoCarga />
 
       <Seccion titulo="Pendientes" cantidad={pendientes.length}>
         {pendientes.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-[#D0D0CC] bg-tarjeta px-6 py-8 text-center text-[15px] text-suave">
+          <Vacia>
             No tienes pagos pendientes.{" "}
             <Link href="/carrito" className="font-semibold text-tinta underline underline-offset-4">
               Ir al carrito
             </Link>
-          </p>
+          </Vacia>
         ) : (
-          <ul className="flex flex-col gap-3">
-            {pendientes.map((o) => (
-              <FilaPendiente
-                key={o.id}
-                orden={o}
-                vencida={estadoOrden(o) === "expirado"}
-                ahora={ahora}
-                onAbrir={() => abrir(o.id)}
-              />
+          <ul className="flex flex-col gap-4">
+            {pendientes.map((p) => (
+              <TarjetaPedido key={p.idPedido} pedido={p} onAbrir={abrir} />
             ))}
           </ul>
         )}
@@ -66,79 +69,48 @@ export default function Pagos() {
 
       <Seccion titulo="Pagados" cantidad={pagados.length} nota="Toca un pago para ver su ticket">
         {pagados.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-[#D0D0CC] bg-tarjeta px-6 py-8 text-center text-[15px] text-suave">
-            Aquí aparecerán tus tickets cuando pagues.
-          </p>
+          <Vacia>Aquí aparecerán tus tickets cuando pagues.</Vacia>
         ) : (
-          <ul className="overflow-hidden rounded-xl border border-borde bg-tarjeta">
-            {pagados.map((o) => {
-              const auto = AUTOS_CLIENTE.find((a) => a.id === o.autoId)!;
-              return (
-                <li key={o.id} className="border-t border-[#EFEFED] first:border-t-0">
-                  <button
-                    type="button"
-                    onClick={() => abrir(o.id)}
-                    className="grid w-full cursor-pointer grid-cols-[40px_170px_minmax(0,1fr)_150px_24px] items-center gap-5 px-6 py-4 text-left hover:bg-[#FAFAF9]"
-                  >
-                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#E7F5EC] text-[#166534]">
-                      <Icono nombre="check" tamano={16} />
-                    </span>
-                    <span>
-                      <span className="block font-mono text-sm font-semibold">{folioOrden(o.id)}</span>
-                      <span className="text-[13px] text-suave">{o.pagadaEn ? fechaHora(o.pagadaEn) : ""}</span>
-                    </span>
-                    <span className="flex items-center gap-3">
-                      <Placa placa={auto.placas} tamano="sm" />
-                      <span className="text-sm text-suave">
-                        {o.lineas.length} {o.lineas.length === 1 ? "pieza" : "piezas"} · {auto.folio}
-                      </span>
-                    </span>
-                    <span className="text-right font-titulo text-[22px] font-semibold">{dinero(totalesOrden(o.lineas).total)}</span>
-                    <span className="-rotate-90 text-suave">
-                      <Icono nombre="chevron" />
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
+          <ul className="flex flex-col gap-3">
+            {pagados.map((p) => (
+              <FilaPagado key={p.idPedido} pedido={p} onAbrir={abrir} />
+            ))}
           </ul>
         )}
       </Seccion>
 
+      {resueltos.length > 0 && (
+        <Seccion titulo="QR sin pagar" cantidad={resueltos.length} nota="Sus piezas ya se pagaron o están en otro QR">
+          <ul className="flex flex-col gap-3">
+            {resueltos.map((p) => (
+              <TarjetaPedido key={p.idPedido} pedido={p} onAbrir={abrir} />
+            ))}
+          </ul>
+        </Seccion>
+      )}
+
       {abierta &&
         (abierta.estado === "pagado" && !params.get("recien") ? (
           <Modal etiqueta="Comprobante de pago" titulo="Ticket" ancho={480} onCerrar={cerrar}>
-            <Ticket orden={abierta} cliente={usuario.nombre} />
+            <Ticket orden={abierta} cliente={usuario?.nombre ?? ""} mecanico={mecanicoDe(abierta)} />
             <button type="button" onClick={cerrar} className={`${BOTON_BORDE} mt-5 w-full`}>
               Cerrar
             </button>
           </Modal>
         ) : (
-          <ModalQR key={abierta.id} orden={abierta} onCerrar={cerrar} onCambiar={abrir} />
+          <ModalQR key={abierta.idOrden} orden={abierta} pedido={pedidos.find((p) => p.idPedido === abierta.idPedido)} onCerrar={cerrar} onCambiar={abrir} />
         ))}
     </>
   );
 }
 
-function Seccion({
-  titulo,
-  cantidad,
-  nota,
-  children,
-}: {
-  titulo: string;
-  cantidad: number;
-  nota?: string;
-  children: React.ReactNode;
-}) {
+function Seccion({ titulo, cantidad, nota, children }: { titulo: string; cantidad: number; nota?: string; children: React.ReactNode }) {
   return (
     <section className="mb-10">
       <div className="mb-3.5 flex items-center justify-between">
         <h2 className="flex items-center gap-2.5 font-titulo text-[24px] font-semibold">
           {titulo}
-          <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-tinta px-2 font-sans text-xs text-acento">
-            {cantidad}
-          </span>
+          <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-tinta px-2 font-sans text-xs text-acento">{cantidad}</span>
         </h2>
         {nota && <span className="text-sm text-suave">{nota}</span>}
       </div>
@@ -147,92 +119,182 @@ function Seccion({
   );
 }
 
-const restante = (expiraEn: string, ahora: number | null) => {
-  if (ahora === null) return "--:--";
-  const s = Math.max(0, Math.floor((new Date(expiraEn).getTime() - ahora) / 1000));
-  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-};
+function Vacia({ children }: { children: React.ReactNode }) {
+  return <p className="rounded-xl border border-dashed border-[#D0D0CC] bg-tarjeta px-6 py-8 text-center text-[15px] text-suave">{children}</p>;
+}
 
-function FilaPendiente({
-  orden,
-  vencida,
-  ahora,
-  onAbrir,
-}: {
-  orden: Orden;
-  vencida: boolean;
-  ahora: number | null;
-  onAbrir: () => void;
-}) {
-  const auto = AUTOS_CLIENTE.find((a) => a.id === orden.autoId)!;
-  const color = buscarColor(auto.colorCodigo);
+// Estado de un QR en particular
+function EstadoQR({ orden }: { orden: OrdenCliente }) {
+  const { estadoOrden, ahora } = useCliente();
+  const estado = estadoOrden(orden);
+  const base = "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap";
+  if (estado === "pagado") return <span className={`${base} border-[#BFE3CB] bg-[#E7F5EC] text-[#166534]`}>Pagado</span>;
+  if (estado === "pendiente")
+    return (
+      <span className={`${base} border-tinta text-tinta`}>
+        <Icono nombre="reloj" tamano={12} />
+        Vence en <span className="font-mono">{restante(orden.expiraEn, ahora)}</span>
+      </span>
+    );
+  if (estado === "rechazado")
+    return (
+      <span className={`${base} border-error/30 bg-error/5 text-error`}>
+        <Icono nombre="alerta" tamano={12} />
+        Pago rechazado
+      </span>
+    );
+  return <span className={`${base} border-borde bg-fondo text-suave`}>Vencido</span>;
+}
+
+function TarjetaPedido({ pedido, onAbrir }: { pedido: Pedido; onAbrir: (id: number) => void }) {
+  const { estadoOrden } = useCliente();
+  const { ultimo } = pedido;
+  const vigente = estadoOrden(ultimo) === "pendiente";
+  const accionable = pedido.estado !== "resuelto";
   return (
-    <li className="grid grid-cols-[150px_minmax(0,1fr)_120px_210px_190px] items-center gap-6 rounded-xl border border-borde bg-tarjeta px-6 py-4">
-      <div>
-        <p className="text-xs text-suave">Orden</p>
-        <p className="font-mono text-sm font-semibold">{folioOrden(orden.id)}</p>
-      </div>
-      <div className="flex items-center gap-3">
-        <Placa placa={auto.placas} tamano="sm" />
-        <span className="flex items-center gap-1.5 text-sm text-suave">
-          <Muestra hex={color?.hex} />
-          {orden.lineas.length} {orden.lineas.length === 1 ? "pieza" : "piezas"}
-        </span>
-      </div>
-      <div>
-        <p className="text-xs text-suave">Monto</p>
-        <p className="font-titulo text-[22px] leading-tight font-semibold">{dinero(totalesOrden(orden.lineas).total)}</p>
-      </div>
-      <div>
-        {vencida ? (
-          <>
-            <span className="inline-flex items-center gap-1 rounded-full border border-error/30 bg-error/5 px-2.5 py-0.5 text-xs font-semibold text-error">
-              <Icono nombre="alerta" tamano={13} />
-              QR vencido
-            </span>
-            <p className="mt-1 text-[13px] text-suave">Venció {fechaHora(orden.expiraEn)}</p>
-          </>
-        ) : (
-          <>
-            <span className="inline-flex rounded-full border border-tinta px-2.5 py-0.5 text-xs font-semibold">Por pagar</span>
-            <p className="mt-1 flex items-center gap-1 text-[13px] text-suave">
-              <Icono nombre="reloj" tamano={13} />
-              Vence en <span className="font-mono">{restante(orden.expiraEn, ahora)}</span>
+    <li className="overflow-hidden rounded-xl border border-borde bg-tarjeta">
+      <div className="grid grid-cols-[minmax(0,1fr)_130px_200px] items-center gap-6 px-6 py-4">
+        <div className="flex min-w-0 items-center gap-4">
+          <Placa placa={pedido.placa} tamano="sm" />
+          <div className="min-w-0">
+            <p className="flex items-center gap-1.5 text-sm text-suave">
+              <Muestra hex={colorHex(pedido.color)} />
+              {folioDiagnostico(pedido.folio)} · {plural(ultimo.lineas.length, "pieza", "piezas")}
             </p>
-          </>
+            <p className="truncate text-[15px] font-semibold">{ultimo.lineas.map((l) => l.pieza).join(", ")}</p>
+          </div>
+        </div>
+        <div>
+          <p className="text-xs text-suave">Monto</p>
+          <p className="font-titulo text-[22px] leading-tight font-semibold">{dinero(ultimo.monto)}</p>
+        </div>
+        {accionable ? (
+          <button type="button" onClick={() => onAbrir(ultimo.idOrden)} className={`${BOTON_BORDE} w-full`}>
+            {vigente ? "Ver QR" : "Generar nuevo QR"}
+          </button>
+        ) : (
+          <span className="text-right text-sm text-suave">Sin acción pendiente</span>
         )}
       </div>
-      <button type="button" onClick={onAbrir} className={`${BOTON_BORDE} w-full`}>
-        {vencida ? "Generar nuevo QR" : "Ver QR"}
-      </button>
+      <HistorialQR pedido={pedido} onAbrir={onAbrir} />
     </li>
   );
 }
 
-function ModalQR({ orden, onCerrar, onCambiar }: { orden: Orden; onCerrar: () => void; onCambiar: (id: number) => void }) {
+// Todos los QR de un pedido, del más nuevo al más viejo (incluye los vencidos)
+function HistorialQR({ pedido, onAbrir }: { pedido: Pedido; onAbrir: (id: number) => void }) {
+  const { estadoOrden } = useCliente();
+  return (
+    <div className="border-t border-[#EFEFED] bg-[#FAFAF9] px-6 py-3">
+      <p className="mb-1.5 text-xs font-semibold tracking-[0.12em] text-suave uppercase">
+        {plural(pedido.intentos.length, "QR generado", "QR generados")}
+      </p>
+      <ul>
+        {pedido.intentos.map((o) => (
+          <li key={o.idOrden} className="grid grid-cols-[150px_minmax(0,1fr)_auto_70px] items-center gap-4 py-1.5 text-sm">
+            <span className="font-mono text-[13px] font-semibold">{folioOrden(o.idOrden)}</span>
+            <span className="text-suave">
+              Generado {fechaHora(o.creadaEn)}
+              {o.pagadaEn && ` · pagado ${fechaHora(o.pagadaEn)}`}
+            </span>
+            <EstadoQR orden={o} />
+            <span className="text-right">
+              {(estadoOrden(o) === "pendiente" || o.estado === "pagado") && (
+                <button type="button" onClick={() => onAbrir(o.idOrden)} className="cursor-pointer font-semibold underline underline-offset-4 hover:text-tinta">
+                  {o.estado === "pagado" ? "Ticket" : "Ver"}
+                </button>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function FilaPagado({ pedido, onAbrir }: { pedido: Pedido; onAbrir: (id: number) => void }) {
+  const pagada = pedido.pagada!;
+  const [historial, setHistorial] = useState(false);
+  return (
+    <li className="overflow-hidden rounded-xl border border-borde bg-tarjeta">
+      <div className="grid grid-cols-[40px_160px_minmax(0,1fr)_130px_150px] items-center gap-5 px-6 py-4">
+        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#E7F5EC] text-[#166534]">
+          <Icono nombre="check" tamano={16} />
+        </span>
+        <span>
+          <span className="block font-mono text-sm font-semibold">{folioOrden(pagada.idOrden)}</span>
+          <span className="text-[13px] text-suave">{pagada.pagadaEn ? fechaHora(pagada.pagadaEn) : ""}</span>
+        </span>
+        <span className="flex min-w-0 items-center gap-3">
+          <Placa placa={pedido.placa} tamano="sm" />
+          <span className="min-w-0 text-sm text-suave">
+            {plural(pagada.lineas.length, "pieza", "piezas")} · {folioDiagnostico(pedido.folio)}
+            {pedido.intentos.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setHistorial(!historial)}
+                aria-expanded={historial}
+                className="ml-2 cursor-pointer font-semibold underline underline-offset-4 hover:text-tinta"
+              >
+                {historial ? "Ocultar" : "Ver"} {plural(pedido.intentos.length, "QR", "QR")}
+              </button>
+            )}
+          </span>
+        </span>
+        <span className="text-right font-titulo text-[22px] font-semibold">{dinero(pagada.monto)}</span>
+        <button type="button" onClick={() => onAbrir(pagada.idOrden)} className={`${BOTON_BORDE} w-full`}>
+          Ver ticket
+        </button>
+      </div>
+      {historial && <HistorialQR pedido={pedido} onAbrir={onAbrir} />}
+    </li>
+  );
+}
+
+function ModalQR({
+  orden,
+  pedido,
+  onCerrar,
+  onCambiar,
+}: {
+  orden: OrdenCliente;
+  pedido?: Pedido;
+  onCerrar: () => void;
+  onCambiar: (id: number) => void;
+}) {
   const router = useRouter();
   const { estadoOrden, ahora, generarNuevoQR, simularPago } = useCliente();
-  const confirmado = orden.estado === "pagado";
+  const [trabajando, setTrabajando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const estado = estadoOrden(orden);
-  const vencida = estado === "expirado";
-  const auto = AUTOS_CLIENTE.find((a) => a.id === orden.autoId)!;
-  const { total } = totalesOrden(orden.lineas);
+  const vencida = estado === "expirado" || estado === "rechazado";
+  const anteriores = (pedido?.intentos.length ?? 1) - 1;
 
-  if (confirmado) {
+  async function regenerar() {
+    setTrabajando(true);
+    setError(null);
+    try {
+      onCambiar(await generarNuevoQR(orden.idOrden));
+    } catch (fallo) {
+      setError(fallo instanceof Error ? `No se pudo generar el QR: ${fallo.message}` : "No se pudo generar el QR. Intenta de nuevo.");
+    } finally {
+      setTrabajando(false);
+    }
+  }
+
+  if (orden.estado === "pagado") {
     return (
       <Modal etiqueta="Pago con CoDi" titulo="Pago confirmado" onCerrar={onCerrar}>
         <div className="flex flex-col items-center rounded-lg border border-[#BFE3CB] bg-[#E7F5EC] px-6 py-8 text-center">
           <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[#166534] text-white">
             <Icono nombre="check" tamano={28} />
           </span>
-          <p className="mt-4 font-titulo text-[30px] leading-none font-semibold text-tinta">{dinero(total)}</p>
-          <p className="mt-2 text-[15px] text-[#166534]">
-            Recibimos el pago de {formatoPlaca(auto.placas)}. Tu reparación ya está en turno.
-          </p>
+          <p className="mt-4 font-titulo text-[30px] leading-none font-semibold text-tinta">{dinero(orden.monto)}</p>
+          <p className="mt-2 text-[15px] text-[#166534]">Recibimos el pago de {formatoPlaca(orden.placa)}. Tu reparación ya está en turno.</p>
         </div>
         <button
           type="button"
-          onClick={() => router.replace(`/pagos?orden=${orden.id}`, { scroll: false })}
+          onClick={() => router.replace(`/pagos?orden=${orden.idOrden}`, { scroll: false })}
           className={`${BOTON_ACENTO} mt-5 w-full`}
         >
           Ver ticket
@@ -243,13 +305,13 @@ function ModalQR({ orden, onCerrar, onCambiar }: { orden: Orden; onCerrar: () =>
   }
 
   return (
-    <Modal etiqueta="Pago con CoDi" titulo={vencida ? "Este QR venció" : "Escanea para pagar"} onCerrar={onCerrar}>
+    <Modal etiqueta="Pago con CoDi" titulo={vencida ? (estado === "rechazado" ? "El pago de este QR se rechazó" : "Este QR venció") : "Escanea para pagar"} onCerrar={onCerrar}>
       <div className="relative flex justify-center rounded-lg border border-borde bg-tarjeta py-5">
-        <CodigoQR semilla={orden.id} apagado={vencida} />
+        <CodigoQR semilla={orden.idOrden} qrString={orden.qrString} apagado={vencida} />
         {vencida && (
           <span className="absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full border border-error/30 bg-tarjeta px-3 py-1 text-sm font-semibold text-error">
             <Icono nombre="reloj" tamano={15} />
-            Vencido
+            {estado === "rechazado" ? "Rechazado" : "Vencido"}
           </span>
         )}
       </div>
@@ -258,20 +320,23 @@ function ModalQR({ orden, onCerrar, onCambiar }: { orden: Orden; onCerrar: () =>
         <div>
           <p className="text-xs text-suave">Total a pagar</p>
           <p className="font-titulo text-[34px] leading-none font-semibold">
-            {dinero(total)} <span className="text-sm text-suave">MXN</span>
+            {dinero(orden.monto)} <span className="text-sm text-suave">MXN</span>
           </p>
         </div>
-        <Placa placa={auto.placas} tamano="sm" />
+        <Placa placa={orden.placa} tamano="sm" />
       </div>
 
       <dl className="mt-4 grid grid-cols-2 gap-4 text-[15px]">
         <div>
           <dt className="text-xs text-suave">Concepto</dt>
-          <dd className="font-semibold">Suspensión · {auto.folio}</dd>
+          <dd className="font-semibold">
+            Suspensión · {folioDiagnostico(orden.folio)} · {plural(orden.lineas.length, "pieza", "piezas")}
+          </dd>
         </div>
         <div>
           <dt className="text-xs text-suave">Orden</dt>
-          <dd className="font-mono text-sm font-semibold">{folioOrden(orden.id)}</dd>
+          <dd className="font-mono text-sm font-semibold">{folioOrden(orden.idOrden)}</dd>
+          {anteriores > 0 && <dd className="text-[13px] text-suave">{plural(anteriores, "QR anterior vencido", "QR anteriores vencidos")}</dd>}
         </div>
       </dl>
 
@@ -280,12 +345,20 @@ function ModalQR({ orden, onCerrar, onCambiar }: { orden: Orden; onCerrar: () =>
           <p role="alert" className="mt-5 flex items-start gap-2 rounded-lg border border-error/40 bg-error/5 px-3 py-2.5 text-sm text-error">
             <Icono nombre="alerta" tamano={16} className="mt-px" />
             <span>
-              <b>El QR venció sin recibir el pago.</b> Genera uno nuevo para pagar; si pagas un QR vencido, el pago no se
-              aplica.
+              {estado === "rechazado" ? (
+                <>
+                  <b>El pago no se aplicó</b> (llegó tarde o con otro monto). Genera un QR nuevo para pagar.
+                </>
+              ) : (
+                <>
+                  <b>El QR venció sin recibir el pago.</b> Genera uno nuevo; si pagas un QR vencido, el pago no se aplica.
+                </>
+              )}
             </span>
           </p>
-          <button type="button" onClick={() => onCambiar(generarNuevoQR(orden.id))} className={`${BOTON_ACENTO} mt-5 w-full`}>
-            Generar nuevo QR
+          {error && <Aviso tipo="error" texto={error} className="mt-3" />}
+          <button type="button" onClick={() => void regenerar()} disabled={trabajando} className={`${BOTON_ACENTO} mt-5 w-full`}>
+            {trabajando ? "Generando…" : "Generar nuevo QR"}
           </button>
         </>
       ) : (
@@ -303,17 +376,22 @@ function ModalQR({ orden, onCerrar, onCambiar }: { orden: Orden; onCerrar: () =>
           <p className="mt-3 text-[13px] text-suave">
             Abre la app de tu banco, entra a CoDi y escanea el código. Esta pantalla se actualiza sola cuando llegue el pago.
           </p>
-          {/* Solo para la demo: en producción el webhook de pey confirma el pago */}
-          <button
-            type="button"
-            onClick={() => {
-              simularPago(orden.id);
-              router.replace(`/pagos?orden=${orden.id}&recien=1`, { scroll: false });
-            }}
-            className="mt-4 w-full cursor-pointer rounded-lg border border-dashed border-[#D0D0CC] py-2 text-[13px] font-semibold text-suave hover:border-tinta hover:text-tinta"
-          >
-            Simular pago (solo demo)
-          </button>
+          {simularPago && (
+            // Solo en la demo: en producción el webhook de pey confirma el pago
+            <button
+              type="button"
+              disabled={trabajando}
+              onClick={async () => {
+                setTrabajando(true);
+                await simularPago(orden.idOrden);
+                setTrabajando(false);
+                router.replace(`/pagos?orden=${orden.idOrden}&recien=1`, { scroll: false });
+              }}
+              className="mt-4 w-full cursor-pointer rounded-lg border border-dashed border-[#D0D0CC] py-2 text-[13px] font-semibold text-suave hover:border-tinta hover:text-tinta"
+            >
+              Simular pago (solo demo)
+            </button>
+          )}
         </>
       )}
     </Modal>

@@ -2,7 +2,7 @@
 
 // Pantalla 1: Login (cliente y mecánico), diseñada para computadora
 // Inicia sesión con Supabase Auth y manda a cada usuario a su parte según su rol:
-// cliente → /inicio, mecánico → /taller (tabla perfil, ver docs/base-de-datos.md).
+// cliente con autos → /autos, cliente sin autos → /inicio, mecánico → /taller (tabla perfil, ver docs/base-de-datos.md).
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -76,7 +76,16 @@ export default function LoginPage() {
       }
 
       setAviso({ tipo: "exito", texto: `¡Hola, ${perfil.nombre}! Entrando…` });
-      router.push(perfil.rol === "mecanico" ? "/taller" : "/inicio");
+      if (perfil.rol === "mecanico") {
+        router.push("/taller");
+        return;
+      }
+      // Cliente: si ya registró autos va a Mis autos; si no, a registrar su primer auto
+      const { count } = await supabase
+        .from("carro")
+        .select("id_carro", { count: "exact", head: true })
+        .eq("id_cliente", data.user.id);
+      router.push(count ? "/autos" : "/inicio");
     } catch (fallo) {
       setAviso({ tipo: "error", texto: mensajeDeFallo(fallo) });
     } finally {

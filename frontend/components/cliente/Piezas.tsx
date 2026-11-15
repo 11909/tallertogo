@@ -1,6 +1,6 @@
 // Piezas visuales pequeñas que comparten las pantallas del cliente.
 import Image from "next/image";
-import { ESTILO_ETAPA, formatoPlaca, type EtapaCliente } from "@/lib/clienteDemo";
+import { ESTILO_ETAPA, formatoPlaca, type EtapaCliente } from "@/lib/cliente/formato";
 
 // Etiqueta con forma de placa de auto: marco fino, franja superior y texto espaciado.
 export function Placa({ placa, tamano = "md" }: { placa: string; tamano?: "sm" | "md" | "lg" }) {

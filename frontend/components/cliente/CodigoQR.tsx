@@ -1,14 +1,36 @@
-// QR de ejemplo para la demo (no se puede pagar).
-// TODO (conexión con pey): mostrar la imagen que regresa POST /codi/qr (`qrImage`, PNG en base64).
-export default function CodigoQR({ semilla, tamano = 220, apagado = false }: { semilla: number; tamano?: number; apagado?: boolean }) {
+// Código QR del pago CoDi.
+// TODO (pey): dibujar el QR real a partir de orden.qr_string (o mostrar qrImage, PNG en base64, de POST /codi/qr).
+// Por ahora se dibuja un QR de ejemplo que no se puede pagar.
+import { Icono } from "@/components/cliente/Piezas";
+
+export default function CodigoQR({
+  semilla,
+  qrString,
+  tamano = 220,
+  apagado = false,
+}: {
+  semilla: number;
+  qrString: string | null;
+  tamano?: number;
+  apagado?: boolean;
+}) {
+  if (!qrString) {
+    return (
+      <div
+        className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[#D0D0CC] bg-fondo px-6 text-center text-sm text-suave"
+        style={{ width: tamano, height: tamano }}
+      >
+        <Icono nombre="reloj" tamano={22} />
+        Generando el código QR…
+      </div>
+    );
+  }
   const n = 25;
   const celdas: [number, number][] = [];
   for (let y = 0; y < n; y++) {
     for (let x = 0; x < n; x++) {
       const enEsquina = (x < 8 && y < 8) || (x >= n - 8 && y < 8) || (x < 8 && y >= n - 8);
-      if (enEsquina) continue;
-      const v = (x * 31 + y * 17 + x * y * 7 + semilla * 13) % 11;
-      if (v < 5) celdas.push([x, y]);
+      if (!enEsquina && (x * 31 + y * 17 + x * y * 7 + semilla * 13) % 11 < 5) celdas.push([x, y]);
     }
   }
   const esquinas = [

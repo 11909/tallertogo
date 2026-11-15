@@ -263,7 +263,10 @@ El nombre de la restricción sigue la convención de PostgreSQL (`<tabla>_<colum
 | --- | --- | --- | --- |
 | `v_diagnostico_cliente` | vista | cliente | Una fila por **falla × marca** de los diagnósticos no borrador: folio, `estado_diagnostico`, `descripcion_general`, `fecha_envio`, placa, color, `mecanico`, `id_falla`, `sistema`, `id_pieza`, `pieza`, `eje`, `lado`, `descripcion`, `id_marca`, `marca`, `nombre_comercial`, `precio_centavos`, `mano_obra_centavos`, `subtotal_centavos`, `estado_falla` |
 | `v_ticket` | vista | cliente, mecánico | Una fila por falla comprada de órdenes `pagado`: `num_ticket`, `transaction_id`, `fecha_pago`, `monto_centavos`, folio, placa, `cliente`, `mecanico`, `sistema`, `id_pieza`, `pieza`, `eje`, `lado`, `marca`, `precio_centavos`, `mano_obra_centavos`, `subtotal_centavos` |
-| `crear_orden(p_folio int, p_lineas jsonb)` | función (RPC) | cliente, **con su sesión** (usa `auth.uid()`) | Valida que el diagnóstico sea suyo y esté en `enviado` o `pagado`, cancela un QR pendiente anterior, rechaza fallas ya pagadas, calcula el monto y crea la orden con sus líneas. Devuelve `id_orden`. `p_lineas = [{ "id_falla": 7, "id_marca": 1 }, …]` |
+| `crear_orden(p_folio int, p_lineas jsonb)` | función (RPC) | cliente, **con su sesión** (usa `auth.uid()`) | Valida que el diagnóstico sea suyo y esté en `enviado` o `pagado`, rechaza fallas ya pagadas (desde el paso 9 tampoco acepta las que están en otro QR vigente y ya no cancela QR anteriores), calcula el monto y crea la orden con sus líneas. Devuelve `id_orden`. `p_lineas = [{ "id_falla": 7, "id_marca": 1 }, …]` |
+| `v_orden_cliente` | vista (paso 9) | cliente | Una fila por línea de cada orden, también las vencidas: `id_orden`, `id_pedido`, folio, `id_carro`, placa, color, `estado` (un pendiente con la hora pasada sale como `expirado`), `monto_centavos`, `qr_string`, `expira_en`, `fecha_creacion`, `fecha_pago`, `transaction_id`, `id_falla`, `id_pieza`, `pieza`, `eje`, `lado`, `id_marca`, `marca`, `precio_centavos`, `mano_obra_centavos` |
+| `regenerar_qr(p_id_orden int)` | función (RPC, paso 9) | cliente | Si el QR venció o se rechazó, crea otra orden con las mismas piezas que sigan libres, en el mismo pedido (`id_pedido`). Devuelve el `id_orden` nuevo |
+| `cambiar_cierre_diagnostico(p_folio int, p_cerrado boolean)` | función (RPC, paso 9) | cliente | Cierra o reabre su diagnóstico (`diagnostico.cerrado`) mientras esté en `enviado` o `pagado` |
 | `registrar_pago(p_codi_qr_id, p_transaction_id, p_monto_centavos, p_fecha_pago)` | función | solo el servidor (service role), desde el webhook | Devuelve `'pagado'`, `'repetido'`, `'rechazado'` o `'desconocido'` |
 | `es_mecanico()` | función | políticas RLS | `true` si el usuario actual es el mecánico |
 | `carros_eliminables()` | función (RPC) | cliente | Devuelve los `id_carro` del cliente que todavía se pueden eliminar (sin ningún diagnóstico, incluidos los borradores que el cliente no ve) |
@@ -412,11 +415,14 @@ const { data: diag } = await supabase.from('diagnostico')
   .select(`folio, estado, descripcion, fecha_envio, fecha_reparacion, fecha_listo, fecha_entrega,
            carro ( placa, color, fecha_registro ),
            falla ( id_falla, mano_obra_centavos, pieza ( id_pieza, nombre, eje, lado ) ),
-           orden ( id_orden, estado, fecha_pago, monto_centavos, orden_detalle ( id_falla, id_marca ) )`)
+           orden ( id_orden, estado, fecha_pago, monto_centavos, orden_detalle ( id_falla, id_marca, activa ) )`)
   .eq('folio', folio).single();
+// Desde el paso 9, orden_detalle también guarda las líneas de QR vencidos o rechazados (activa = false).
+// Lo que compró el cliente = líneas de órdenes con estado 'pagado'; lo que está en un QR por pagar = 'pendiente' con activa.
+const compradas = diag.orden.filter(o => o.estado === 'pagado').flatMap(o => o.orden_detalle);
 // Línea de tiempo: carro.fecha_registro → fecha_envio → orden.fecha_pago (pagadas) →
 //                  fecha_reparacion → fecha_listo → fecha_entrega.
-// Marca elegida y total pagado: v_ticket del folio (o orden_detalle + precio_pieza).
+// Marca elegida y total pagado: v_ticket del folio (o orden_detalle de las órdenes 'pagado' + precio_pieza).
 ```
 
 ### Cliente
@@ -1034,9 +1040,189 @@ create policy perfil_editar_cliente on perfil for update
   with check (id_perfil = auth.uid() and rol = 'cliente');
 ```
 
+### Paso 9: cerrar diagnóstico, QR aparte por compra e historial de QR
+
+Lo necesitan las pantallas del cliente (`frontend/lib/cliente/fuenteSupabase.ts`). Cambia tres reglas:
+
+1. **Cerrar / reabrir diagnóstico:** columna `diagnostico.cerrado` y la función `cambiar_cierre_diagnostico`. Solo es una marca del cliente: no cambia `estado` ni lo que hace el mecánico.
+2. **QR aparte por compra:** `crear_orden` ya **no cancela** los QR vigentes del diagnóstico; solo rechaza las fallas que ya están pagadas o en otro QR vigente. Así, las piezas que el cliente compra después tienen su propio QR.
+3. **Historial de QR:** las líneas de una orden vencida o rechazada ya no se borran, se marcan `activa = false`. Una falla solo puede estar en **una** orden activa (índice único parcial). `regenerar_qr` crea un QR nuevo con las mismas piezas y guarda en `orden.id_pedido` la orden original, para mostrar juntos todos los QR de un pedido.
+
+Además, un QR `pendiente` cuya hora ya pasó cuenta como vencido: `liberar_vencidas` lo marca `expirado` antes de crear otra orden, y las vistas lo muestran como vencido.
+
+> **Pantallas del mecánico:** `orden_detalle` ahora conserva las líneas de órdenes vencidas (`activa = false`). Al leer lo que compró el cliente, filtrar `orden.estado = 'pagado'` o `orden_detalle.activa`.
+
+```sql
+-- 1) Cerrar / reabrir diagnóstico (lo decide el cliente)
+alter table diagnostico add column if not exists cerrado boolean not null default false;
+
+create or replace function cambiar_cierre_diagnostico(p_folio int, p_cerrado boolean) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  update diagnostico d set cerrado = p_cerrado
+    from carro c
+   where d.folio = p_folio and c.id_carro = d.id_carro
+     and c.id_cliente = auth.uid() and d.estado in ('enviado','pagado');
+  if not found then
+    raise exception 'Diagnóstico no disponible' using errcode = 'P0001', hint = 'no_disponible';
+  end if;
+end $$;
+
+-- 2) Historial de QR: pedido y líneas activas
+alter table orden add column if not exists id_pedido int references orden(id_orden);   -- null = es la orden original
+alter table orden_detalle add column if not exists activa boolean not null default true;
+alter table orden_detalle drop constraint if exists orden_detalle_pkey;
+alter table orden_detalle add primary key (id_orden, id_falla);
+-- Una falla solo puede estar en UNA orden activa (pendiente o pagada): frena dobles compras
+create unique index if not exists orden_detalle_falla_activa on orden_detalle (id_falla) where activa;
+
+-- QR pendientes cuya hora ya pasó: se marcan expirados y liberan sus fallas (sin borrar el historial)
+create or replace function liberar_vencidas(p_folio int) returns void
+language sql security definer set search_path = public as $$
+  with vencidas as (
+    update orden set estado = 'expirado'
+     where folio = p_folio and estado = 'pendiente' and expira_en <= now()
+    returning id_orden)
+  update orden_detalle set activa = false where id_orden in (select id_orden from vencidas);
+$$;
+
+-- 3) crear_orden: ya NO cancela los QR vigentes; cada compra parcial es un QR aparte
+create or replace function crear_orden(p_folio int, p_lineas jsonb)
+returns int language plpgsql security definer set search_path = public as $$
+declare v_orden int; v_monto int; v_n int;
+begin
+  if not exists (select 1 from diagnostico d join carro c using (id_carro)
+                  where d.folio = p_folio and c.id_cliente = auth.uid()
+                    and d.estado in ('enviado','pagado')) then
+    raise exception 'Diagnóstico no disponible para compra';
+  end if;
+  perform liberar_vencidas(p_folio);
+  select count(*), sum(pp.precio_centavos + f.mano_obra_centavos)
+    into v_n, v_monto
+    from jsonb_to_recordset(p_lineas) as l(id_falla int, id_marca smallint)
+    join falla f         on f.id_falla = l.id_falla and f.folio = p_folio
+    join precio_pieza pp on pp.id_pieza = f.id_pieza and pp.id_marca = l.id_marca
+   where not exists (select 1 from orden_detalle od where od.id_falla = l.id_falla and od.activa);
+  if v_n = 0 or v_n <> jsonb_array_length(p_lineas) then
+    raise exception 'Alguna pieza ya está pagada, en otro QR vigente o no es válida para este diagnóstico';
+  end if;
+  insert into orden (folio, monto_centavos, expira_en)
+  values (p_folio, v_monto, now() + interval '10 minutes')
+  returning id_orden into v_orden;
+  insert into orden_detalle (id_falla, id_orden, id_marca)   -- el índice único frena dobles compras
+  select l.id_falla, v_orden, l.id_marca
+    from jsonb_to_recordset(p_lineas) as l(id_falla int, id_marca smallint);
+  return v_orden;
+end $$;
+
+-- Un QR vencido o rechazado se genera de nuevo con las mismas piezas (las que sigan libres), en el mismo pedido
+create or replace function regenerar_qr(p_id_orden int) returns int
+language plpgsql security definer set search_path = public as $$
+declare o orden%rowtype; v_lineas jsonb; v_nueva int;
+begin
+  select o2.* into o
+    from orden o2
+    join diagnostico d on d.folio = o2.folio
+    join carro c       on c.id_carro = d.id_carro
+   where o2.id_orden = p_id_orden and c.id_cliente = auth.uid();
+  if not found then raise exception 'Orden no encontrada' using errcode = 'P0001'; end if;
+  if o.estado = 'pagado' then raise exception 'Esta orden ya está pagada' using errcode = 'P0001'; end if;
+  if o.estado = 'pendiente' and o.expira_en > now() then
+    raise exception 'El QR sigue vigente' using errcode = 'P0001';
+  end if;
+  perform liberar_vencidas(o.folio);
+  select jsonb_agg(jsonb_build_object('id_falla', od.id_falla, 'id_marca', od.id_marca))
+    into v_lineas
+    from orden_detalle od
+   where od.id_orden = o.id_orden
+     and not exists (select 1 from orden_detalle a where a.id_falla = od.id_falla and a.activa);
+  if v_lineas is null then
+    raise exception 'Las piezas de esta orden ya se pagaron o están en otro QR' using errcode = 'P0001';
+  end if;
+  v_nueva := crear_orden(o.folio, v_lineas);
+  update orden set id_pedido = coalesce(o.id_pedido, o.id_orden) where id_orden = v_nueva;
+  return v_nueva;
+end $$;
+
+-- registrar_pago: un pago rechazado ya no borra las líneas, las desactiva (queda en el historial)
+create or replace function registrar_pago(p_codi_qr_id varchar, p_transaction_id varchar,
+                                          p_monto_centavos int, p_fecha_pago timestamptz)
+returns varchar language plpgsql as $$
+declare o orden%rowtype;
+begin
+  select * into o from orden where codi_qr_id = p_codi_qr_id for update;
+  if not found then return 'desconocido'; end if;
+  if o.estado in ('pagado','rechazado') then return 'repetido'; end if;   -- se ignora
+  if o.estado = 'expirado' or p_fecha_pago > o.expira_en
+     or p_monto_centavos <> o.monto_centavos then
+    update orden set estado = 'rechazado', transaction_id = p_transaction_id,
+                     fecha_pago = p_fecha_pago
+     where id_orden = o.id_orden;
+    update orden_detalle set activa = false where id_orden = o.id_orden;
+    return 'rechazado';
+  end if;
+  update orden set estado = 'pagado', transaction_id = p_transaction_id,
+                   fecha_pago = p_fecha_pago
+   where id_orden = o.id_orden;
+  update diagnostico set estado = 'pagado' where folio = o.folio and estado = 'enviado';
+  return 'pagado';
+end $$;
+
+revoke execute on function registrar_pago(varchar, varchar, int, timestamptz) from public, anon, authenticated;
+revoke execute on function liberar_vencidas(int) from public, anon, authenticated;
+revoke execute on function regenerar_qr(int), cambiar_cierre_diagnostico(int, boolean) from public, anon;
+grant execute on function regenerar_qr(int), cambiar_cierre_diagnostico(int, boolean) to authenticated;
+
+-- Vista del cliente: solo cuenta las líneas activas, un QR con la hora pasada ya no bloquea la falla
+-- y se agrega `cerrado` al final (create or replace view solo permite columnas nuevas al final)
+create or replace view v_diagnostico_cliente with (security_invoker = true) as
+select d.folio, d.estado as estado_diagnostico, d.fecha_envio,
+       c.id_cliente, c.placa, c.color,
+       m.nombre || ' ' || m.apellido_paterno as mecanico,
+       f.id_falla, s.nombre as sistema, p.id_pieza, p.nombre as pieza, p.eje, p.lado, f.descripcion,
+       mr.id_marca, mr.nombre as marca, pp.nombre_comercial,
+       pp.precio_centavos, f.mano_obra_centavos,
+       pp.precio_centavos + f.mano_obra_centavos as subtotal_centavos,
+       case when o.estado = 'pagado' then 'pagada'
+            when o.estado = 'pendiente' and o.expira_en > now() then 'en_pago'
+            when d.estado in ('enviado','pagado') then 'disponible'
+            else 'no_comprada' end as estado_falla,
+       d.descripcion as descripcion_general,
+       d.cerrado
+from diagnostico d
+join carro c            on c.id_carro = d.id_carro
+join perfil m           on m.id_perfil = d.id_mecanico
+join falla f            on f.folio = d.folio
+join pieza p            on p.id_pieza = f.id_pieza
+join sistema s          on s.id_sistema = p.id_sistema
+join precio_pieza pp    on pp.id_pieza = f.id_pieza
+join marca_refaccion mr on mr.id_marca = pp.id_marca
+left join orden_detalle od on od.id_falla = f.id_falla and od.activa
+left join orden o          on o.id_orden = od.id_orden
+where d.estado <> 'borrador';
+
+-- Pagos del cliente: una fila por línea de cada orden (también las vencidas), con su pedido
+create or replace view v_orden_cliente with (security_invoker = true) as
+select o.id_orden, coalesce(o.id_pedido, o.id_orden) as id_pedido, o.folio,
+       c.id_carro, c.placa, c.color,
+       case when o.estado = 'pendiente' and o.expira_en <= now() then 'expirado' else o.estado end as estado,
+       o.monto_centavos, o.qr_string, o.expira_en, o.fecha_creacion, o.fecha_pago, o.transaction_id,
+       od.id_falla, f.id_pieza, p.nombre as pieza, p.eje, p.lado,
+       od.id_marca, mr.nombre as marca, pp.precio_centavos, f.mano_obra_centavos
+from orden o
+join diagnostico d      on d.folio = o.folio
+join carro c            on c.id_carro = d.id_carro
+join orden_detalle od   on od.id_orden = o.id_orden
+join falla f            on f.id_falla = od.id_falla
+join pieza p            on p.id_pieza = f.id_pieza
+join marca_refaccion mr on mr.id_marca = od.id_marca
+join precio_pieza pp    on pp.id_pieza = f.id_pieza and pp.id_marca = od.id_marca;
+```
+
 ## 10. Pendientes
 
 - [ ] Correr el SQL en el proyecto de Supabase.
 - [ ] Si la base ya estaba creada antes de la descripción general, los turnos y la línea de tiempo: correr el **paso 7**.
 - [ ] Correr el **paso 8** para que el cliente pueda editar su perfil (el mecánico no puede).
 - [ ] Decidir si se fuerza el orden de los estados del diagnóstico con un trigger (hoy RLS solo impide que el mecánico ponga `pagado`).
+- [ ] Correr el **paso 9** (cerrar diagnóstico, QR aparte por compra e historial de QR) y poner `NEXT_PUBLIC_DATOS_CLIENTE=supabase` en `frontend/.env.local` para que las pantallas del cliente usen la base.

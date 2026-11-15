@@ -1,50 +1,62 @@
 "use client";
 
-// Estado compartido de las pantallas del cliente: carrito, órdenes (QR CoDi y tickets) y diagnósticos cerrados.
-// Vive en el layout de (cliente), así que se conserva al cambiar entre Mis autos, Carrito y Pagos.
-// TODO (conexión con la BD):
-//   - carrito: se queda en el navegador; al confirmar se llama crear_orden(folio, líneas) por cada auto.
-//   - órdenes: leer de `orden` / `v_ticket` y escuchar su cambio a 'pagado' con Supabase Realtime.
-//   - "cerrar diagnóstico" todavía no existe en la base: definir dónde se guarda (ver CLAUDE.md §4).
+// Estado compartido de las pantallas del cliente (vive en el layout de (cliente), así que se conserva al cambiar
+// entre Mis autos, Carrito y Pagos). Lee y escribe solo a través de `fuenteCliente` (demo o Supabase).
+//
+// Carrito: todas las piezas disponibles de cada diagnóstico entran solas al carrito con la primera marca (OEM).
+// El cliente cambia la marca u omite las que no quiere. El carrito y las omisiones se guardan solo en el navegador
+// (localStorage):
+// en la base solo existen las órdenes (crear_orden), así que el total real lo sigue calculando el servidor.
 import { useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import {
-  AUTOS_CLIENTE,
-  CARRITO_DEMO,
-  CLIENTE_DEMO,
-  ETAPA_DESDE_TALLER,
-  MINUTOS_QR,
-  ORDENES_DEMO,
-  type EtapaCliente,
-  type LineaOrden,
-  type Marca,
-  type Orden,
-} from "@/lib/clienteDemo";
-import { DIAGNOSTICOS_DEMO } from "@/lib/diagnosticosDemo";
-import { crearClienteNavegador } from "@/lib/supabase/cliente";
+import { fuenteCliente } from "@/lib/cliente/fuente";
+import { puedeComprar, type EtapaCliente } from "@/lib/cliente/formato";
+import type { AutoCliente, DatosCliente, Falla, Marca, OpcionMarca, OrdenCliente } from "@/lib/cliente/tipos";
 
-type Carrito = Record<string, Record<string, Marca>>; // auto → pieza → marca
 export type EstadoFalla =
   | { tipo: "disponible" }
-  | { tipo: "en_pago"; ordenId: number; marca: Marca } // tiene un QR vigente sin pagar
-  | { tipo: "pagada"; marca: Marca; ordenId: number };
+  | { tipo: "no_comprada" }
+  | { tipo: "en_pago"; marca: Marca; idOrden: number } // en un QR vigente sin pagar
+  | { tipo: "pagada"; marca: Marca; idOrden: number };
+
+export type ItemCarrito = { auto: AutoCliente; folio: number; falla: Falla; opcion: OpcionMarca };
+
+// Un pedido son todos los QR que se generaron para las mismas piezas (al vencer uno se genera otro).
+export type EstadoPedido = "pendiente" | "vencido" | "rechazado" | "pagado" | "resuelto";
+export type Pedido = {
+  idPedido: number;
+  folio: number;
+  idCarro: number;
+  placa: string;
+  color: string;
+  intentos: OrdenCliente[]; // del más nuevo al más viejo
+  ultimo: OrdenCliente;
+  pagada: OrdenCliente | null;
+  estado: EstadoPedido;
+};
 
 type Valor = {
-  usuario: { nombre: string; iniciales: string };
-  ahora: number | null; // reloj para las cuentas regresivas (null hasta montar en el navegador)
-  carrito: Carrito;
-  piezasEnCarrito: number;
-  ordenes: Orden[];
-  cerrados: Record<string, boolean>;
-  etapaDe: (autoId: string) => EtapaCliente;
-  estadoOrden: (orden: Orden) => Orden["estado"];
-  estadoFalla: (autoId: string, piezaId: string) => EstadoFalla;
-  elegir: (autoId: string, piezaId: string, marca: Marca) => void;
-  quitar: (autoId: string, piezaId: string) => void;
-  confirmarCarrito: () => number[];
-  generarNuevoQR: (ordenId: number) => number;
-  simularPago: (ordenId: number) => void;
-  alternarCierre: (autoId: string) => void;
+  cargando: boolean;
+  error: string | null;
+  usuario: DatosCliente["usuario"] | null;
+  autos: AutoCliente[];
+  ordenes: OrdenCliente[];
+  pedidos: Pedido[];
+  ahora: number | null;
+  demo: boolean;
+  etapaDe: (auto: AutoCliente) => EtapaCliente;
+  estadoOrden: (orden: OrdenCliente) => OrdenCliente["estado"];
+  estadoFalla: (auto: AutoCliente, falla: Falla) => EstadoFalla;
+  carrito: ItemCarrito[];
+  enCarrito: (falla: Falla) => boolean;
+  opcionElegida: (falla: Falla) => OpcionMarca;
+  elegirMarca: (falla: Falla, idMarca: number) => void;
+  omitir: (falla: Falla) => void;
+  incluir: (falla: Falla) => void;
+  confirmarCarrito: () => Promise<{ ids: number[]; errores: string[] }>;
+  generarNuevoQR: (idOrden: number) => Promise<number>;
+  cambiarCierre: (auto: AutoCliente, cerrado: boolean) => Promise<void>;
+  simularPago?: (idOrden: number) => Promise<void>;
   salir: () => void;
 };
 
@@ -56,220 +68,288 @@ export function useCliente() {
   return valor;
 }
 
+const fuente = fuenteCliente;
+const CLAVE_CARRITO = `paddock:carrito:${fuenteCliente.nombre}`;
+
 export default function EstadoCliente({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const [usuario, setUsuario] = useState(CLIENTE_DEMO);
+  const [datos, setDatos] = useState<DatosCliente | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [ahora, setAhora] = useState<number | null>(null);
-  const [carrito, setCarrito] = useState<Carrito>(CARRITO_DEMO);
-  const [ordenes, setOrdenes] = useState<Orden[]>(ORDENES_DEMO);
-  const [cerrados, setCerrados] = useState<Record<string, boolean>>({});
+  const [marcas, setMarcas] = useState<Record<number, number>>({}); // idFalla → idMarca elegida
+  const [omitidas, setOmitidas] = useState<Record<number, true>>({}); // idFalla que el cliente quitó
+
+  const recargar = useCallback(async () => {
+    try {
+      const r = await fuente.cargar();
+      if (r === "sin_sesion") {
+        router.replace("/login");
+        return;
+      }
+      setDatos(r);
+      setError(null);
+    } catch (fallo) {
+      console.error("[TallerToGo] cargar cliente:", fallo);
+      setError("No se pudieron cargar tus datos. Revisa tu conexión y recarga la página.");
+    }
+  }, [router]);
+
+  // Carga inicial y seguimiento en vivo (Realtime en Supabase)
+  useEffect(() => {
+    const primera = setTimeout(() => void recargar(), 0);
+    const dejar = fuente.escuchar(() => void recargar());
+    return () => {
+      clearTimeout(primera);
+      dejar();
+    };
+  }, [recargar]);
+
+  // El carrito (marca elegida y piezas omitidas) se guarda en este navegador para que no se pierda al recargar
+  const [carritoListo, setCarritoListo] = useState(false);
+  useEffect(() => {
+    const id = setTimeout(() => {
+      try {
+        const guardado = JSON.parse(localStorage.getItem(CLAVE_CARRITO) ?? "null");
+        if (guardado?.marcas) setMarcas(guardado.marcas);
+        if (guardado?.omitidas) setOmitidas(guardado.omitidas);
+      } catch {
+        // Sin acceso al almacenamiento: el carrito vive solo en memoria
+      }
+      setCarritoListo(true);
+    }, 0);
+    return () => clearTimeout(id);
+  }, []);
+  useEffect(() => {
+    if (!carritoListo) return;
+    try {
+      localStorage.setItem(CLAVE_CARRITO, JSON.stringify({ marcas, omitidas }));
+    } catch {
+      // Sin acceso al almacenamiento
+    }
+  }, [carritoListo, marcas, omitidas]);
 
   // Reloj de un segundo para la vigencia de los QR
   useEffect(() => {
     const tic = () => setAhora(Date.now());
-    const id = setInterval(tic, 1000);
     const primero = setTimeout(tic, 0);
+    const id = setInterval(tic, 1000);
     return () => {
-      clearInterval(id);
       clearTimeout(primero);
+      clearInterval(id);
     };
   }, []);
 
-  // Nombre del cliente con sesión (si no hay conexión con Supabase, se queda el de la demo)
-  // TODO: cuando las pantallas lean de la base, mandar a /login si no hay sesión, como en /inicio.
-  useEffect(() => {
-    let vigente = true;
-    (async () => {
-      try {
-        const supabase = crearClienteNavegador();
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (!user) return;
-        const { data: perfil } = await supabase
-          .from("perfil")
-          .select("nombre, apellido_paterno")
-          .eq("id_perfil", user.id)
-          .maybeSingle();
-        if (perfil && vigente) {
-          setUsuario({
-            nombre: `${perfil.nombre} ${perfil.apellido_paterno}`,
-            iniciales: `${perfil.nombre[0] ?? ""}${perfil.apellido_paterno[0] ?? ""}`.toUpperCase(),
-          });
-        }
-      } catch {
-        // Sin conexión: se muestran los datos de la demo
-      }
-    })();
-    return () => {
-      vigente = false;
-    };
-  }, []);
+  const ordenes = useMemo(() => datos?.ordenes ?? [], [datos]);
+  const autos = useMemo(() => datos?.autos ?? [], [datos]);
 
+  // Un QR pendiente cuya hora ya pasó se trata como vencido (la base hace lo mismo en v_orden_cliente)
   const estadoOrden = useCallback(
-    (o: Orden): Orden["estado"] =>
+    (o: OrdenCliente): OrdenCliente["estado"] =>
       o.estado === "pendiente" && ahora !== null && ahora >= new Date(o.expiraEn).getTime() ? "expirado" : o.estado,
     [ahora]
   );
 
-  const etapaDe = useCallback(
-    (autoId: string): EtapaCliente => {
-      const auto = AUTOS_CLIENTE.find((a) => a.id === autoId);
-      if (!auto) return "esperando";
-      const etapa = ETAPA_DESDE_TALLER[auto.etapa];
-      // El primer pago confirmado pasa el diagnóstico de enviado a pagado
-      if (etapa === "enviado" && ordenes.some((o) => o.autoId === autoId && o.estado === "pagado")) return "pagado";
-      return etapa;
-    },
-    [ordenes]
-  );
+  const etapaDe = useCallback((auto: AutoCliente): EtapaCliente => auto.diagnostico?.estado ?? "esperando", []);
 
   const estadoFalla = useCallback(
-    (autoId: string, piezaId: string): EstadoFalla => {
+    (auto: AutoCliente, falla: Falla): EstadoFalla => {
       for (const o of ordenes) {
-        if (o.autoId !== autoId) continue;
-        const linea = o.lineas.find((l) => l.piezaId === piezaId);
+        const linea = o.lineas.find((l) => l.idFalla === falla.idFalla);
         if (!linea) continue;
-        if (o.estado === "pagado") return { tipo: "pagada", marca: linea.marca, ordenId: o.id };
-        if (estadoOrden(o) === "pendiente") return { tipo: "en_pago", marca: linea.marca, ordenId: o.id };
+        if (o.estado === "pagado") return { tipo: "pagada", marca: linea.marca, idOrden: o.idOrden };
+        if (estadoOrden(o) === "pendiente") return { tipo: "en_pago", marca: linea.marca, idOrden: o.idOrden };
       }
-      return { tipo: "disponible" };
+      return puedeComprar(etapaDe(auto)) ? { tipo: "disponible" } : { tipo: "no_comprada" };
     },
-    [ordenes, estadoOrden]
+    [ordenes, estadoOrden, etapaDe]
   );
 
-  const elegir = useCallback((autoId: string, piezaId: string, marca: Marca) => {
-    setCarrito((c) => ({ ...c, [autoId]: { ...(c[autoId] ?? {}), [piezaId]: marca } }));
-  }, []);
+  const opcionElegida = useCallback(
+    (falla: Falla) => falla.opciones.find((o) => o.idMarca === marcas[falla.idFalla]) ?? falla.opciones[0],
+    [marcas]
+  );
 
-  const quitar = useCallback((autoId: string, piezaId: string) => {
-    setCarrito((c) => {
-      const delAuto = { ...(c[autoId] ?? {}) };
-      delete delAuto[piezaId];
-      const copia = { ...c, [autoId]: delAuto };
-      if (Object.keys(delAuto).length === 0) delete copia[autoId];
+  // Carrito: piezas disponibles que el cliente no ha omitido
+  const carrito = useMemo<ItemCarrito[]>(
+    () =>
+      autos.flatMap((auto) =>
+        (auto.diagnostico?.fallas ?? [])
+          .filter((f) => estadoFalla(auto, f).tipo === "disponible" && !omitidas[f.idFalla])
+          .map((f) => ({ auto, folio: auto.diagnostico!.folio, falla: f, opcion: opcionElegida(f) }))
+      ),
+    [autos, estadoFalla, omitidas, opcionElegida]
+  );
+  const enCarrito = useCallback((f: Falla) => carrito.some((i) => i.falla.idFalla === f.idFalla), [carrito]);
+
+  const elegirMarca = useCallback((f: Falla, idMarca: number) => {
+    setMarcas((m) => ({ ...m, [f.idFalla]: idMarca }));
+    setOmitidas((o) => {
+      const copia = { ...o };
+      delete copia[f.idFalla];
+      return copia;
+    });
+  }, []);
+  const omitir = useCallback((f: Falla) => setOmitidas((o) => ({ ...o, [f.idFalla]: true })), []);
+  const incluir = useCallback((f: Falla) => {
+    setOmitidas((o) => {
+      const copia = { ...o };
+      delete copia[f.idFalla];
       return copia;
     });
   }, []);
 
-  // Crea una orden pendiente (un QR) y cancela el QR pendiente anterior del mismo auto, como crear_orden.
-  const nuevaOrden = useCallback((lista: Orden[], autoId: string, lineas: LineaOrden[]) => {
-    const id = Math.max(0, ...lista.map((o) => o.id)) + 1;
-    const creada = new Date();
-    const orden: Orden = {
-      id,
-      autoId,
-      lineas,
-      estado: "pendiente",
-      creadaEn: creada.toISOString(),
-      expiraEn: new Date(creada.getTime() + MINUTOS_QR * 60_000).toISOString(),
-    };
-    const resto = lista.map((o) =>
-      o.autoId === autoId && o.estado === "pendiente" ? { ...o, estado: "expirado" as const } : o
-    );
-    return { lista: [orden, ...resto], id };
-  }, []);
-
-  const confirmarCarrito = useCallback(() => {
+  // Un QR (orden) por auto, porque cada diagnóstico se paga con sus propias órdenes
+  const confirmarCarrito = useCallback(async () => {
+    const porFolio = new Map<number, ItemCarrito[]>();
+    for (const i of carrito) porFolio.set(i.folio, [...(porFolio.get(i.folio) ?? []), i]);
     const ids: number[] = [];
-    let lista = ordenes;
-    for (const [autoId, piezas] of Object.entries(carrito)) {
-      const manoDeObra = (piezaId: string) =>
-        Math.round((DIAGNOSTICOS_DEMO[autoId]?.fallas.find((f) => f.piezaId === piezaId)?.manoDeObra ?? 0) * 100);
-      const lineas = Object.entries(piezas).map(([piezaId, marca]) => ({
-        piezaId,
-        marca,
-        manoDeObra: manoDeObra(piezaId),
-      }));
-      if (lineas.length === 0) continue;
-      const r = nuevaOrden(lista, autoId, lineas);
-      lista = r.lista;
-      ids.push(r.id);
+    const errores: string[] = [];
+    for (const [folio, items] of porFolio) {
+      try {
+        ids.push(await fuente.crearOrden(folio, items.map((i) => ({ idFalla: i.falla.idFalla, idMarca: i.opcion.idMarca }))));
+      } catch (fallo) {
+        errores.push(`${items[0].auto.placa}: ${fallo instanceof Error ? fallo.message : "no se pudo generar el QR"}`);
+      }
     }
-    setOrdenes(lista);
-    setCarrito({});
-    return ids;
-  }, [carrito, ordenes, nuevaOrden]);
+    await recargar();
+    return { ids, errores };
+  }, [carrito, recargar]);
 
   const generarNuevoQR = useCallback(
-    (ordenId: number) => {
-      const anterior = ordenes.find((o) => o.id === ordenId);
-      if (!anterior) return ordenId;
-      // No se vuelven a cobrar piezas que ya se pagaron en otra orden
-      const pagadas = new Set(
-        ordenes.filter((o) => o.autoId === anterior.autoId && o.estado === "pagado").flatMap((o) => o.lineas.map((l) => l.piezaId))
-      );
-      const r = nuevaOrden(
-        ordenes.map((o) => (o.id === ordenId ? { ...o, estado: "expirado" as const } : o)),
-        anterior.autoId,
-        anterior.lineas.filter((l) => !pagadas.has(l.piezaId))
-      );
-      setOrdenes(r.lista);
-      return r.id;
+    async (idOrden: number) => {
+      const id = await fuente.regenerarQR(idOrden);
+      await recargar();
+      return id;
     },
-    [ordenes, nuevaOrden]
+    [recargar]
   );
 
-  // Solo para la demo: en producción únicamente el webhook de pey marca una orden como pagada.
-  const simularPago = useCallback((ordenId: number) => {
-    const pagadaEn = new Date().toISOString();
-    setOrdenes((lista) => lista.map((o) => (o.id === ordenId ? { ...o, estado: "pagado", pagadaEn } : o)));
-  }, []);
+  // Cerrar: las piezas omitidas quedan sin comprar. Reabrir: vuelven al carrito.
+  const cambiarCierre = useCallback(
+    async (auto: AutoCliente, cerrado: boolean) => {
+      if (!auto.diagnostico) return;
+      await fuente.cambiarCierre(auto.diagnostico.folio, cerrado);
+      if (!cerrado) {
+        const ids = new Set(auto.diagnostico.fallas.map((f) => f.idFalla));
+        setOmitidas((o) => Object.fromEntries(Object.entries(o).filter(([id]) => !ids.has(Number(id)))) as Record<number, true>);
+      }
+      await recargar();
+    },
+    [recargar]
+  );
 
-  const alternarCierre = useCallback((autoId: string) => {
-    setCerrados((c) => ({ ...c, [autoId]: !c[autoId] }));
-  }, []);
+  const simularPago = useMemo(
+    () =>
+      fuente.simularPago
+        ? async (idOrden: number) => {
+            await fuente.simularPago!(idOrden);
+            await recargar();
+          }
+        : undefined,
+    [recargar]
+  );
 
-  const salir = useCallback(async () => {
-    try {
-      await crearClienteNavegador().auth.signOut();
-    } catch {
-      // Sin conexión: igual se regresa al login
-    } finally {
-      router.push("/login");
-    }
+  const pedidos = useMemo<Pedido[]>(() => {
+    const grupos = new Map<number, OrdenCliente[]>();
+    for (const o of ordenes) grupos.set(o.idPedido, [...(grupos.get(o.idPedido) ?? []), o]);
+    return [...grupos.entries()].map(([idPedido, lista]) => {
+      const intentos = [...lista].sort((a, b) => b.idOrden - a.idOrden);
+      const ultimo = intentos[0];
+      const pagada = intentos.find((o) => o.estado === "pagado") ?? null;
+      const efectivo = estadoOrden(ultimo);
+      // Un pedido vencido cuyas piezas ya se pagaron o están en otro QR ya no necesita acción
+      const resuelto =
+        !pagada &&
+        efectivo !== "pendiente" &&
+        ultimo.lineas.every((l) =>
+          ordenes.some(
+            (o) => o.idPedido !== idPedido && (o.estado === "pagado" || estadoOrden(o) === "pendiente") && o.lineas.some((x) => x.idFalla === l.idFalla)
+          )
+        );
+      const estado: EstadoPedido = pagada
+        ? "pagado"
+        : resuelto
+          ? "resuelto"
+          : efectivo === "pendiente"
+            ? "pendiente"
+            : efectivo === "rechazado"
+              ? "rechazado"
+              : "vencido";
+      return { idPedido, folio: ultimo.folio, idCarro: ultimo.idCarro, placa: ultimo.placa, color: ultimo.color, intentos, ultimo, pagada, estado };
+    });
+  }, [ordenes, estadoOrden]);
+
+  const salir = useCallback(() => {
+    void (async () => {
+      try {
+        await fuente.salir();
+      } finally {
+        router.push("/login");
+      }
+    })();
   }, [router]);
-
-  const piezasEnCarrito = Object.values(carrito).reduce((s, piezas) => s + Object.keys(piezas).length, 0);
 
   const valor = useMemo<Valor>(
     () => ({
-      usuario,
-      ahora,
-      carrito,
-      piezasEnCarrito,
+      cargando: datos === null && error === null,
+      error,
+      usuario: datos?.usuario ?? null,
+      autos,
       ordenes,
-      cerrados,
+      pedidos,
+      ahora,
+      demo: fuente.nombre === "demo",
       etapaDe,
       estadoOrden,
       estadoFalla,
-      elegir,
-      quitar,
+      carrito,
+      enCarrito,
+      opcionElegida,
+      elegirMarca,
+      omitir,
+      incluir,
       confirmarCarrito,
       generarNuevoQR,
+      cambiarCierre,
       simularPago,
-      alternarCierre,
-      salir: () => void salir(),
+      salir,
     }),
     [
-      usuario,
-      ahora,
-      carrito,
-      piezasEnCarrito,
+      datos,
+      error,
+      autos,
       ordenes,
-      cerrados,
+      pedidos,
+      ahora,
       etapaDe,
       estadoOrden,
       estadoFalla,
-      elegir,
-      quitar,
+      carrito,
+      enCarrito,
+      opcionElegida,
+      elegirMarca,
+      omitir,
+      incluir,
       confirmarCarrito,
       generarNuevoQR,
+      cambiarCierre,
       simularPago,
-      alternarCierre,
       salir,
     ]
   );
 
   return <Contexto.Provider value={valor}>{children}</Contexto.Provider>;
+}
+
+// Para las pantallas: mientras carga o si falló la carga
+export function EstadoCarga() {
+  const { cargando, error } = useCliente();
+  if (error)
+    return (
+      <p role="alert" className="rounded-xl border border-error/40 bg-error/5 px-5 py-4 text-[15px] text-error">
+        {error}
+      </p>
+    );
+  if (cargando) return <p className="py-10 text-center text-sm text-suave">Cargando…</p>;
+  return null;
 }

@@ -1,6 +1,6 @@
 // Seguimiento en vivo de un auto: línea de tiempo horizontal con el estado del diagnóstico.
 // (Antes vivía arriba de /inicio; ahora se ve dentro del diagnóstico de cada auto.)
-import { PASOS, fechaHora, type EtapaCliente } from "@/lib/clienteDemo";
+import { PASOS, fechaHora, type EtapaCliente } from "@/lib/cliente/formato";
 
 export default function LineaTiempo({
   etapa,

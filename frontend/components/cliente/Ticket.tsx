@@ -1,27 +1,18 @@
 // Ticket de una orden pagada: cliente, mecánico, auto, piezas por proveedor y totales.
-// TODO (conexión con la BD): leer de v_ticket (num_ticket, transaction_id, fecha_pago, renglones…).
+// Con Supabase los datos equivalen a v_ticket (num_ticket = id_orden, transaction_id, fecha_pago, renglones).
 import Image from "next/image";
 import { Placa } from "@/components/cliente/Piezas";
 import { Muestra } from "@/components/SeguimientoEnVivo";
-import {
-  AUTOS_CLIENTE,
-  MARCAS,
-  MECANICO_DEMO,
-  MODELO,
-  dinero,
-  fechaHora,
-  folioOrden,
-  pieza,
-  precioCentavos,
-  totalesOrden,
-  type Orden,
-} from "@/lib/clienteDemo";
-import { buscarColor } from "@/lib/colores";
+import { MODELO, dinero, fechaHora, folioDiagnostico, folioOrden } from "@/lib/cliente/formato";
+import type { Marca, OrdenCliente } from "@/lib/cliente/tipos";
+import { COLORES_Z06_2025 } from "@/lib/colores";
 
-export default function Ticket({ orden, cliente }: { orden: Orden; cliente: string }) {
-  const auto = AUTOS_CLIENTE.find((a) => a.id === orden.autoId)!;
-  const color = buscarColor(auto.colorCodigo);
-  const { piezas, manoDeObra, total } = totalesOrden(orden.lineas);
+const PROVEEDORES: Marca[] = ["OEM", "GM"];
+
+export default function Ticket({ orden, cliente, mecanico }: { orden: OrdenCliente; cliente: string; mecanico: string }) {
+  const hex = COLORES_Z06_2025.find((c) => c.nombre === orden.color)?.hex;
+  const piezas = orden.lineas.reduce((s, l) => s + l.precio, 0);
+  const manoObra = orden.lineas.reduce((s, l) => s + l.manoObra, 0);
 
   return (
     <article className="mx-auto w-full max-w-[400px] rounded-xl border border-borde bg-tarjeta px-7 pt-6 pb-7">
@@ -31,7 +22,7 @@ export default function Ticket({ orden, cliente }: { orden: Orden; cliente: stri
       </div>
 
       <div className="mt-5 text-center">
-        <p className="font-mono text-[15px] font-semibold">{folioOrden(orden.id)}</p>
+        <p className="font-mono text-[15px] font-semibold">{folioOrden(orden.idOrden)}</p>
         <p className="mt-0.5 text-[13px] text-suave">{orden.pagadaEn ? fechaHora(orden.pagadaEn) : ""}</p>
       </div>
 
@@ -44,23 +35,23 @@ export default function Ticket({ orden, cliente }: { orden: Orden; cliente: stri
         </div>
         <div>
           <dt className="text-xs text-suave">Mecánico</dt>
-          <dd className="text-[15px] font-semibold">{MECANICO_DEMO}</dd>
+          <dd className="text-[15px] font-semibold">{mecanico || "—"}</dd>
         </div>
       </dl>
       <div className="mt-4 flex items-center justify-between gap-3">
         <div>
           <p className="text-[15px] font-semibold">{MODELO}</p>
           <p className="mt-0.5 flex items-center gap-1.5 text-[13px] text-suave">
-            <Muestra hex={color?.hex} />
-            {color?.nombre} · <span className="font-mono text-xs">{auto.folio}</span>
+            <Muestra hex={hex} />
+            {orden.color} · <span className="font-mono text-xs">{folioDiagnostico(orden.folio)}</span>
           </p>
         </div>
-        <Placa placa={auto.placas} tamano="sm" />
+        <Placa placa={orden.placa} tamano="sm" />
       </div>
 
       <Separador />
 
-      {MARCAS.map((marca) => {
+      {PROVEEDORES.map((marca) => {
         const lineas = orden.lineas.filter((l) => l.marca === marca);
         if (lineas.length === 0) return null;
         return (
@@ -70,12 +61,12 @@ export default function Ticket({ orden, cliente }: { orden: Orden; cliente: stri
             </p>
             <ul className="flex flex-col gap-2">
               {lineas.map((l) => (
-                <li key={l.piezaId} className="flex items-start justify-between gap-4 text-[15px]">
+                <li key={l.idFalla} className="flex items-start justify-between gap-4 text-[15px]">
                   <span>
-                    {pieza(l.piezaId).nombre}
-                    <code className="block font-mono text-xs text-suave">{l.piezaId}</code>
+                    {l.pieza}
+                    <code className="block font-mono text-xs text-suave">{l.idPieza}</code>
                   </span>
-                  <span className="font-semibold whitespace-nowrap">{dinero(precioCentavos(marca))}</span>
+                  <span className="font-semibold whitespace-nowrap">{dinero(l.precio)}</span>
                 </li>
               ))}
             </ul>
@@ -94,18 +85,18 @@ export default function Ticket({ orden, cliente }: { orden: Orden; cliente: stri
           <dt className="text-suave">
             Subtotal de mano de obra <span className="text-[13px]">({orden.lineas.length})</span>
           </dt>
-          <dd>{dinero(manoDeObra)}</dd>
+          <dd>{dinero(manoObra)}</dd>
         </div>
         <div className="mt-2 flex items-baseline justify-between border-t border-borde pt-3">
           <dt className="font-titulo text-[20px] font-semibold">Total</dt>
           <dd className="font-titulo text-[28px] leading-none font-semibold">
-            {dinero(total)} <span className="text-sm text-suave">MXN</span>
+            {dinero(orden.monto)} <span className="text-sm text-suave">MXN</span>
           </dd>
         </div>
       </dl>
 
       <p className="mt-5 flex items-center justify-center gap-2 rounded-lg border border-[#BFE3CB] bg-[#E7F5EC] py-2 text-sm font-semibold text-[#166534]">
-        Pagado con CoDi · Ref. {String(orden.id).padStart(7, "0")}
+        Pagado con CoDi · Ref. {String(orden.idOrden).padStart(7, "0")}
       </p>
     </article>
   );
