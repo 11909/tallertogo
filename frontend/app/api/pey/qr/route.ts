@@ -58,7 +58,11 @@ export async function POST(request: Request) {
     .maybeSingle();
   if (errorOrden) {
     console.error("[pey] No se pudo consultar la orden:", errorOrden);
-    return respuesta("No se pudo consultar la orden.", 500);
+    // 42703 = columna inexistente: la base todavía no tiene monto_cobro_centavos
+    if (errorOrden.code === "42703") {
+      return respuesta("Falta correr el paso 10 de docs/base-de-datos.md en Supabase (cobro de prueba de $0.01).", 500);
+    }
+    return respuesta(`No se pudo consultar la orden: ${errorOrden.message}`, 500);
   }
   if (!orden) return respuesta("No se encontró la orden.", 404);
 
@@ -153,9 +157,26 @@ export async function POST(request: Request) {
   }
 
   if (respuestaPey.status !== 201) {
-    console.error(`[pey] La generación del QR respondió HTTP ${respuestaPey.status}.`);
+    // pey responde { error: { message, type, requestId } } (docs.pey.mx/openapi.json)
+    let detalle = "";
+    try {
+      const cuerpoError: unknown = await respuestaPey.json();
+      const errorPey = esObjeto(cuerpoError) && esObjeto(cuerpoError.error) ? cuerpoError.error : null;
+      if (errorPey) {
+        const tipo = typeof errorPey.type === "string" ? errorPey.type : "";
+        const mensaje = typeof errorPey.message === "string" ? errorPey.message : "";
+        detalle = [tipo, mensaje].filter(Boolean).join(": ").slice(0, 300);
+        console.error(`[pey] La generación del QR respondió HTTP ${respuestaPey.status}:`, tipo, mensaje, errorPey.requestId);
+      }
+    } catch {
+      console.error(`[pey] La generación del QR respondió HTTP ${respuestaPey.status} sin JSON.`);
+    }
     await liberarReserva();
-    return respuesta(`pey no pudo generar el QR (HTTP ${respuestaPey.status}).`, 502);
+    const pista =
+      respuestaPey.status === 401 || respuestaPey.status === 403
+        ? " Revisa que PEY_API_KEY sea la llave activa del portal de pey."
+        : "";
+    return respuesta(`pey no pudo generar el QR (HTTP ${respuestaPey.status})${detalle ? `: ${detalle}` : "."}${pista}`, 502);
   }
 
   let datosPey: unknown;
