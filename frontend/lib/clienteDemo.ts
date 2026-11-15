@@ -3,7 +3,7 @@
 // el flujo completo sin Supabase. Se usa mientras NEXT_PUBLIC_DATOS_CLIENTE no sea "supabase".
 // Reutiliza los autos y diagnósticos de la demo del taller para que ambos lados cuenten la misma historia.
 import { AUTOS_DEMO } from "@/lib/autosTaller";
-import { CATALOGO, PRECIO_DEMO } from "@/lib/catalogo";
+import { CATALOGO, COBRO_PRUEBA_CENTAVOS, precioReferencia } from "@/lib/catalogo";
 import type {
   AutoCliente,
   DatosCliente,
@@ -70,7 +70,7 @@ function crearAutos(): AutoCliente[] {
                 opciones: MARCAS.map((m) => ({
                   ...m,
                   nombreComercial: `${p.nombre} ${m.marca}`,
-                  precio: centavos(PRECIO_DEMO[m.marca]),
+                  precio: centavos(precioReferencia(p.id)[m.marca]),
                 })),
                 estado: "disponible" as const,
               };
@@ -115,6 +115,7 @@ function orden(
     color: auto.color,
     estado,
     monto: lineas.reduce((s, l) => s + l.precio + l.manoObra, 0),
+    cobro: COBRO_PRUEBA_CENTAVOS,
     qrString: `DEMO-${idOrden}`,
     expiraEn: new Date(new Date(creadaEn).getTime() + MINUTOS_QR * 60_000).toISOString(),
     creadaEn,

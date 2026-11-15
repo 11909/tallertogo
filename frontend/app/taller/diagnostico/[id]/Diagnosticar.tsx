@@ -12,7 +12,7 @@ import FranjaAuto from "@/components/FranjaAuto";
 import MenuMecanico from "@/components/MenuMecanico";
 import { COLORES_Z06_2025 } from "@/lib/colores";
 import { normalizar, type AutoTaller } from "@/lib/autosTaller";
-import { PRECIO_DEMO, type Eje, type Lado } from "@/lib/catalogo";
+import { precioReferencia, type Eje, type Lado } from "@/lib/catalogo";
 import { crearClienteNavegador } from "@/lib/supabase/cliente";
 
 const LADO_CORTO: Record<Lado, string> = { IZQUIERDO: "IZQ", DERECHO: "DER", CENTRAL: "CEN" };
@@ -237,7 +237,7 @@ export default function Diagnosticar() {
 
   function agregar(pieza: PiezaCatalogo) {
     if (agregadas.has(pieza.id)) return;
-    setFallas((prev) => [...prev, { pieza, manoDeObra: PRECIO_DEMO.manoDeObra.toFixed(2) }]);
+    setFallas((prev) => [...prev, { pieza, manoDeObra: precioReferencia(pieza.id).manoDeObra.toFixed(2) }]);
     cambiar();
   }
 

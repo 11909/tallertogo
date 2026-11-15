@@ -1,6 +1,7 @@
 // Ticket de una orden pagada: cliente, mecánico, auto, piezas por proveedor y totales.
 // Con Supabase los datos equivalen a v_ticket (num_ticket = id_orden, transaction_id, fecha_pago, renglones).
 import Image from "next/image";
+import CobroPrueba from "@/components/cliente/CobroPrueba";
 import { Placa } from "@/components/cliente/Piezas";
 import { Muestra } from "@/components/SeguimientoEnVivo";
 import { MODELO, dinero, fechaHora, folioDiagnostico, folioOrden } from "@/lib/cliente/formato";
@@ -98,6 +99,7 @@ export default function Ticket({ orden, cliente, mecanico }: { orden: OrdenClien
       <p className="mt-5 flex items-center justify-center gap-2 rounded-lg border border-[#BFE3CB] bg-[#E7F5EC] py-2 text-sm font-semibold text-[#166534]">
         Pagado con CoDi · Ref. {String(orden.idOrden).padStart(7, "0")}
       </p>
+      <CobroPrueba cobro={orden.cobro} pagado className="mt-2.5" />
     </article>
   );
 }

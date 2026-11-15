@@ -62,7 +62,8 @@ export type OrdenCliente = {
   placa: string;
   color: string;
   estado: EstadoOrden;
-  monto: number;
+  monto: number; // total que se muestra (piezas + mano de obra)
+  cobro: number; // lo que se cobra por CoDi: $0.01 en el hackatón (orden.monto_cobro_centavos)
   qrString: string | null;
   expiraEn: string;
   creadaEn: string;

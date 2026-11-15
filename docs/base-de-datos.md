@@ -21,7 +21,7 @@ Modelo de datos de TallerToGo: modelo E-R, paso a tablas, diccionario de datos, 
 - Un cliente puede **eliminar un auto solo si el mecánico todavía no empieza su diagnóstico** (ni siquiera un borrador). Como las órdenes y los tickets cuelgan del diagnóstico, ese auto tampoco tiene órdenes ni tickets. Lo decide la función `eliminar_carro`.
 - Hasta **20 autos por cliente**, cada uno con placa única y uno de los **10 colores de fábrica** del Z06 2025. No se pide VIN. Cada auto tiene sus propios diagnósticos, órdenes y seguimiento.
 - 42 piezas-posición del catálogo (`docs/catalogo-suspension-corvette-z06.md`), cada una independiente (`SUS-DEL-05-IZQ` y `SUS-DEL-05-DER` son piezas distintas). Todas pertenecen al sistema Suspensión; la tabla `sistema` deja listo agregar otros.
-- Dos marcas de refacción, **OEM** y **GM**, cada pieza con su precio en cada marca (84 precios). Demo: OEM = 2 ¢, GM = 1 ¢, mano de obra = 1 ¢ por falla.
+- Dos marcas de refacción, **OEM** y **GM**, cada pieza con su precio en cada marca (84 precios). Se muestran **precios de referencia reales** (paso 10), pero por CoDi **cada orden cobra $0.01** (cobro de prueba del hackatón): `orden.monto_centavos` es el total que se muestra y `orden.monto_cobro_centavos` lo que se cobra.
 - El mecánico escribe **una descripción general por diagnóstico** (qué síntomas tiene el auto y qué encontró) y registra cada **falla** (una pieza-posición defectuosa) con su mano de obra. Una pieza-posición aparece a lo más una vez por diagnóstico.
 - **Turnos:** el mecánico diagnostica por **orden de llegada** (`carro.fecha_registro`) y repara por **orden de pago** (`orden.fecha_pago` de la primera orden pagada).
 - **Línea de tiempo:** cada cambio de estado del diagnóstico guarda su hora (`fecha_envio`, `fecha_reparacion`, `fecha_listo`, `fecha_entrega`). Las pone un trigger.
@@ -171,7 +171,8 @@ Restricción: `UNIQUE (folio, id_pieza)`.
 | --- | --- | --- | --- | --- |
 | id_orden | int (identity) | no | PK | ≤ 9 999 999; se manda a pey como `numRef` (texto) |
 | folio | int | no | FK → `diagnostico.folio` | |
-| monto_centavos | int | no | | Lo calcula `crear_orden`; se valida contra el webhook |
+| monto_centavos | int | no | | Total que se muestra (piezas + mano de obra). Lo calcula `crear_orden` |
+| monto_cobro_centavos | int | no | | Lo que se cobra por CoDi (paso 10): `monto_a_cobrar(total)`, hoy siempre 1 ($0.01). Es el `amount` del QR y se valida contra el webhook |
 | estado | varchar(9) | no | | `pendiente`, `pagado`, `expirado` (vencida o cancelada) o `rechazado` (pago inválido, sin reembolso) |
 | codi_qr_id | varchar(64) | sí | UQ | `id` de la respuesta 201 de pey |
 | qr_string | text | sí | | `qrString` de pey, para dibujar el QR |
@@ -264,7 +265,7 @@ El nombre de la restricción sigue la convención de PostgreSQL (`<tabla>_<colum
 | `v_diagnostico_cliente` | vista | cliente | Una fila por **falla × marca** de los diagnósticos no borrador: folio, `estado_diagnostico`, `descripcion_general`, `fecha_envio`, placa, color, `mecanico`, `id_falla`, `sistema`, `id_pieza`, `pieza`, `eje`, `lado`, `descripcion`, `id_marca`, `marca`, `nombre_comercial`, `precio_centavos`, `mano_obra_centavos`, `subtotal_centavos`, `estado_falla` |
 | `v_ticket` | vista | cliente, mecánico | Una fila por falla comprada de órdenes `pagado`: `num_ticket`, `transaction_id`, `fecha_pago`, `monto_centavos`, folio, placa, `cliente`, `mecanico`, `sistema`, `id_pieza`, `pieza`, `eje`, `lado`, `marca`, `precio_centavos`, `mano_obra_centavos`, `subtotal_centavos` |
 | `crear_orden(p_folio int, p_lineas jsonb)` | función (RPC) | cliente, **con su sesión** (usa `auth.uid()`) | Valida que el diagnóstico sea suyo y esté en `enviado` o `pagado`, rechaza fallas ya pagadas (desde el paso 9 tampoco acepta las que están en otro QR vigente y ya no cancela QR anteriores), calcula el monto y crea la orden con sus líneas. Devuelve `id_orden`. `p_lineas = [{ "id_falla": 7, "id_marca": 1 }, …]` |
-| `v_orden_cliente` | vista (paso 9) | cliente | Una fila por línea de cada orden, también las vencidas: `id_orden`, `id_pedido`, folio, `id_carro`, placa, color, `estado` (un pendiente con la hora pasada sale como `expirado`), `monto_centavos`, `qr_string`, `expira_en`, `fecha_creacion`, `fecha_pago`, `transaction_id`, `id_falla`, `id_pieza`, `pieza`, `eje`, `lado`, `id_marca`, `marca`, `precio_centavos`, `mano_obra_centavos` |
+| `v_orden_cliente` | vista (paso 9) | cliente | Una fila por línea de cada orden, también las vencidas: `id_orden`, `id_pedido`, folio, `id_carro`, placa, color, `estado` (un pendiente con la hora pasada sale como `expirado`), `monto_centavos`, `qr_string`, `expira_en`, `fecha_creacion`, `fecha_pago`, `transaction_id`, `id_falla`, `id_pieza`, `pieza`, `eje`, `lado`, `id_marca`, `marca`, `precio_centavos`, `mano_obra_centavos`, `monto_cobro_centavos` (paso 10) |
 | `regenerar_qr(p_id_orden int)` | función (RPC, paso 9) | cliente | Si el QR venció o se rechazó, crea otra orden con las mismas piezas que sigan libres, en el mismo pedido (`id_pedido`). Devuelve el `id_orden` nuevo |
 | `cambiar_cierre_diagnostico(p_folio int, p_cerrado boolean)` | función (RPC, paso 9) | cliente | Cierra o reabre su diagnóstico (`diagnostico.cerrado`) mientras esté en `enviado` o `pagado` |
 | `registrar_pago(p_codi_qr_id, p_transaction_id, p_monto_centavos, p_fecha_pago)` | función | solo el servidor (service role), desde el webhook | Devuelve `'pagado'`, `'repetido'`, `'rechazado'` o `'desconocido'` |
@@ -535,7 +536,7 @@ La API de pey no tiene sandbox: crear un QR solicita una operación real. No se 
 - **1FN:** `Diagnostico.piezas` era una lista → una fila por falla. `nombre_completo` → nombre y apellidos. Ticket y carrito repetían grupos de pieza/costo → una fila por falla comprada.
 - **2FN:** en (folio, id_pieza) los datos de la pieza dependían solo de `id_pieza` → tabla `pieza`. En (id_pieza, id_marca) el nombre de la marca dependía solo de `id_marca` → tabla `marca_refaccion`; en `precio_pieza` quedan solo `nombre_comercial` y `precio_centavos`.
 - **3FN:** se eliminaron las dependencias transitivas: `folio → id_carro → placa`, `id_orden → folio → cliente/mecánico`, `id_falla → id_pieza` + `(id_pieza, id_marca) → precio`, `id_pieza → id_sistema → nombre_sistema`. Los totales, el estado de cada falla y `numRef` son derivados.
-- Excepciones a propósito: `orden.monto_centavos` (es lo que se cobró y se valida contra el webhook) y `diagnostico.estado` (lo cambia el mecánico a mano).
+- Excepciones a propósito: `orden.monto_centavos` y `orden.monto_cobro_centavos` (el total que vio el cliente y lo que se cobró; se guardan aunque cambien los precios) y `diagnostico.estado` (lo cambia el mecánico a mano).
 
 ## 9. SQL completo
 
@@ -726,7 +727,7 @@ select v.*, s.id_sistema from (values
 ) as v(id_pieza, nombre, nombre_tecnico, eje, lado)
 cross join sistema s where s.nombre = 'Suspensión';
 
--- 84 precios: cada pieza-posición en OEM ($0.02) y GM ($0.01)
+-- 84 precios: cada pieza-posición en OEM ($0.02) y GM ($0.01). El paso 10 los cambia por precios de referencia reales
 insert into precio_pieza (id_pieza, id_marca, nombre_comercial, precio_centavos)
 select p.id_pieza, m.id_marca, p.nombre || ' ' || m.nombre,
        case m.nombre when 'OEM' then 2 else 1 end
@@ -1225,10 +1226,147 @@ join marca_refaccion mr on mr.id_marca = od.id_marca
 join precio_pieza pp    on pp.id_pieza = f.id_pieza and pp.id_marca = od.id_marca;
 ```
 
+### Paso 10: precios reales en pantalla y cobro de prueba de $0.01
+
+Las pantallas muestran **precios de referencia reales** (pieza OEM/GM y mano de obra), pero **cada orden cobra $0.01 por CoDi**, como piden las condiciones del hackatón. Se puede correr más de una vez.
+
+- `precio_pieza.precio_centavos` toma los precios de referencia y las fallas que tenían la mano de obra de prueba (1 centavo) toman la sugerida. Los mismos valores están en `frontend/lib/catalogo.ts` (`PRECIOS_REFERENCIA`).
+- `orden.monto_centavos` sigue siendo el **total que se muestra**. La columna nueva `orden.monto_cobro_centavos` es **lo que se cobra**: el `amount` del QR (`/api/pey/qr`) y lo que `registrar_pago` compara con el webhook.
+- `monto_a_cobrar(total)` decide el cobro. Hoy devuelve 1. Para cobrar el precio real basta cambiarla a `select p_total`.
+- Las órdenes que ya existían conservan su cobro anterior, así un QR ya generado sigue cuadrando con el webhook.
+
+```sql
+-- 1) Precios de referencia (MXN): pieza en OEM y GM y mano de obra sugerida por tipo de pieza.
+--    Los mismos valores están en frontend/lib/catalogo.ts (PRECIOS_REFERENCIA): si cambias uno, cambia el otro.
+drop table if exists pg_temp.precio_referencia;
+create temporary table precio_referencia (tipo varchar(10) primary key, oem int, gm int, mano_obra int);
+insert into precio_referencia values
+  ('SUS-DEL-01',  9800,  7900, 1400), ('SUS-DEL-02', 12500,  9900, 1600),
+  ('SUS-DEL-03',  2900,  2200, 1200), ('SUS-DEL-04', 14800, 11900, 2200),
+  ('SUS-DEL-05', 32500, 26000, 1800), ('SUS-DEL-06',  3400,  2700, 1500),
+  ('SUS-DEL-07',  8900,  7100, 1900), ('SUS-DEL-08',  1250,   950,  700),
+  ('SUS-DEL-09',  1850,  1450,  650), ('SUS-DEL-10',  4600,  3700,  600),
+  ('SUS-DEL-11', 48000, 39000, 6500),
+  ('SUS-TRA-01',  9200,  7400, 1400), ('SUS-TRA-02', 13200, 10500, 1700),
+  ('SUS-TRA-03',  2900,  2200, 1200), ('SUS-TRA-04',  3600,  2900,  900),
+  ('SUS-TRA-05', 15900, 12700, 2400), ('SUS-TRA-06', 32500, 26000, 1800),
+  ('SUS-TRA-07',  3400,  2700, 1500), ('SUS-TRA-08',  8400,  6700, 1900),
+  ('SUS-TRA-09',  1250,   950,  700), ('SUS-TRA-10',  1850,  1450,  650),
+  ('SUS-TRA-11',  4600,  3700,  600), ('SUS-TRA-12', 52000, 42000, 7200);
+
+update precio_pieza pp
+   set precio_centavos = 100 * case m.nombre when 'OEM' then r.oem else r.gm end
+  from marca_refaccion m, precio_referencia r
+ where m.id_marca = pp.id_marca and r.tipo = left(pp.id_pieza, 10);
+
+-- Las fallas que ya existían con la mano de obra de prueba (1 centavo) toman la sugerida
+update falla f set mano_obra_centavos = 100 * r.mano_obra
+  from precio_referencia r
+ where r.tipo = left(f.id_pieza, 10) and f.mano_obra_centavos = 1;
+
+drop table pg_temp.precio_referencia;
+
+-- 2) Lo que se cobra por CoDi va aparte del total que se muestra
+alter table orden add column if not exists monto_cobro_centavos int;
+-- Las órdenes que ya existían cobran lo mismo que antes (así un QR ya generado sigue cuadrando con el webhook)
+update orden set monto_cobro_centavos = monto_centavos where monto_cobro_centavos is null;
+alter table orden alter column monto_cobro_centavos set not null;
+alter table orden drop constraint if exists orden_monto_cobro_positivo;
+alter table orden add constraint orden_monto_cobro_positivo check (monto_cobro_centavos > 0);
+
+-- Total que se muestra en las órdenes que ya existían, recalculado con los precios nuevos
+update orden o set monto_centavos = t.total
+  from (select od.id_orden, sum(pp.precio_centavos + f.mano_obra_centavos)::int as total
+          from orden_detalle od
+          join falla f         on f.id_falla = od.id_falla
+          join precio_pieza pp on pp.id_pieza = f.id_pieza and pp.id_marca = od.id_marca
+         group by od.id_orden) t
+ where t.id_orden = o.id_orden;
+
+-- Cuánto se cobra por una orden. HACKATÓN: siempre 1 centavo ($0.01), sin importar el total.
+-- Para cobrar el precio real: cambiar "select 1" por "select p_total".
+create or replace function monto_a_cobrar(p_total int) returns int
+language sql immutable as $$ select 1 $$;
+
+-- 3) crear_orden (versión del paso 9) guarda el total real y el cobro de prueba
+create or replace function crear_orden(p_folio int, p_lineas jsonb)
+returns int language plpgsql security definer set search_path = public as $$
+declare v_orden int; v_monto int; v_n int;
+begin
+  if not exists (select 1 from diagnostico d join carro c using (id_carro)
+                  where d.folio = p_folio and c.id_cliente = auth.uid()
+                    and d.estado in ('enviado','pagado')) then
+    raise exception 'Diagnóstico no disponible para compra';
+  end if;
+  perform liberar_vencidas(p_folio);
+  select count(*), sum(pp.precio_centavos + f.mano_obra_centavos)
+    into v_n, v_monto
+    from jsonb_to_recordset(p_lineas) as l(id_falla int, id_marca smallint)
+    join falla f         on f.id_falla = l.id_falla and f.folio = p_folio
+    join precio_pieza pp on pp.id_pieza = f.id_pieza and pp.id_marca = l.id_marca
+   where not exists (select 1 from orden_detalle od where od.id_falla = l.id_falla and od.activa);
+  if v_n = 0 or v_n <> jsonb_array_length(p_lineas) then
+    raise exception 'Alguna pieza ya está pagada, en otro QR vigente o no es válida para este diagnóstico';
+  end if;
+  insert into orden (folio, monto_centavos, monto_cobro_centavos, expira_en)
+  values (p_folio, v_monto, monto_a_cobrar(v_monto), now() + interval '10 minutes')
+  returning id_orden into v_orden;
+  insert into orden_detalle (id_falla, id_orden, id_marca)   -- el índice único frena dobles compras
+  select l.id_falla, v_orden, l.id_marca
+    from jsonb_to_recordset(p_lineas) as l(id_falla int, id_marca smallint);
+  return v_orden;
+end $$;
+
+-- 4) registrar_pago compara el pago de pey contra lo que se cobró (no contra el total mostrado)
+create or replace function registrar_pago(p_codi_qr_id varchar, p_transaction_id varchar,
+                                          p_monto_centavos int, p_fecha_pago timestamptz)
+returns varchar language plpgsql as $$
+declare o orden%rowtype;
+begin
+  select * into o from orden where codi_qr_id = p_codi_qr_id for update;
+  if not found then return 'desconocido'; end if;
+  if o.estado in ('pagado','rechazado') then return 'repetido'; end if;   -- se ignora
+  if o.estado = 'expirado' or p_fecha_pago > o.expira_en
+     or p_monto_centavos <> o.monto_cobro_centavos then
+    update orden set estado = 'rechazado', transaction_id = p_transaction_id,
+                     fecha_pago = p_fecha_pago
+     where id_orden = o.id_orden;
+    update orden_detalle set activa = false where id_orden = o.id_orden;
+    return 'rechazado';
+  end if;
+  update orden set estado = 'pagado', transaction_id = p_transaction_id,
+                   fecha_pago = p_fecha_pago
+   where id_orden = o.id_orden;
+  update diagnostico set estado = 'pagado' where folio = o.folio and estado = 'enviado';
+  return 'pagado';
+end $$;
+
+revoke execute on function registrar_pago(varchar, varchar, int, timestamptz) from public, anon, authenticated;
+
+-- 5) Pagos del cliente: se agrega lo cobrado al final de la vista (create or replace view solo permite columnas nuevas al final)
+create or replace view v_orden_cliente with (security_invoker = true) as
+select o.id_orden, coalesce(o.id_pedido, o.id_orden) as id_pedido, o.folio,
+       c.id_carro, c.placa, c.color,
+       case when o.estado = 'pendiente' and o.expira_en <= now() then 'expirado' else o.estado end as estado,
+       o.monto_centavos, o.qr_string, o.expira_en, o.fecha_creacion, o.fecha_pago, o.transaction_id,
+       od.id_falla, f.id_pieza, p.nombre as pieza, p.eje, p.lado,
+       od.id_marca, mr.nombre as marca, pp.precio_centavos, f.mano_obra_centavos,
+       o.monto_cobro_centavos
+from orden o
+join diagnostico d      on d.folio = o.folio
+join carro c            on c.id_carro = d.id_carro
+join orden_detalle od   on od.id_orden = o.id_orden
+join falla f            on f.id_falla = od.id_falla
+join pieza p            on p.id_pieza = f.id_pieza
+join marca_refaccion mr on mr.id_marca = od.id_marca
+join precio_pieza pp    on pp.id_pieza = f.id_pieza and pp.id_marca = od.id_marca;
+```
+
 ## 10. Pendientes
 
 - [ ] Correr el SQL en el proyecto de Supabase.
 - [ ] Si la base ya estaba creada antes de la descripción general, los turnos y la línea de tiempo: correr el **paso 7**.
 - [ ] Correr el **paso 8** para que el cliente pueda editar su perfil (el mecánico no puede).
 - [ ] Decidir si se fuerza el orden de los estados del diagnóstico con un trigger (hoy RLS solo impide que el mecánico ponga `pagado`).
+- [ ] Correr el **paso 10** (precios reales en pantalla, cobro de $0.01 por CoDi) **después del paso 9**.
 - [ ] Correr el **paso 9** (cerrar diagnóstico, QR aparte por compra e historial de QR) y poner `NEXT_PUBLIC_DATOS_CLIENTE=supabase` en `frontend/.env.local` para que las pantallas del cliente usen la base.

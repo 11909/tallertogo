@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import Aviso from "@/components/Aviso";
+import CobroPrueba from "@/components/cliente/CobroPrueba";
 import { TituloPantalla } from "@/components/cliente/EncabezadoCliente";
 import { EstadoCarga, useCliente, type ItemCarrito } from "@/components/cliente/EstadoCliente";
 import Modal from "@/components/cliente/Modal";
@@ -162,11 +163,12 @@ export default function Carrito() {
             </div>
 
             <div className="mt-5 flex items-baseline justify-between border-t border-borde pt-4">
-              <span className="text-base font-semibold">Total a pagar</span>
+              <span className="text-base font-semibold">Total del servicio</span>
               <span className="font-titulo text-[30px] leading-none font-semibold">
                 {dinero(total)} <span className="text-sm text-suave">MXN</span>
               </span>
             </div>
+            <CobroPrueba porQR={grupos.length > 1} className="mt-3" />
 
             <button type="button" onClick={() => setConfirmando(true)} className={`${BOTON_ACENTO} mt-5 w-full`}>
               Confirmar y pagar con CoDi

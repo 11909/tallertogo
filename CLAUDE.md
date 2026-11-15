@@ -107,7 +107,7 @@ Fotos del diagnóstico, inventario, facturación, notificaciones por correo o Wh
 - **Vehículo:** Chevrolet **Corvette Z06 2025** (C8), **sin** el paquete opcional Front Lift. Por eso, las piezas `SUS-DEL-12-IZQ` y `SUS-DEL-12-DER` no se cargan.
 - **Catálogo:** las **42 pieza-posición base** de `docs/catalogo-suspension-corvette-z06.md`: 20 del eje delantero y 22 del trasero, que se reparten en 19 IZQUIERDO, 19 DERECHO y 4 CENTRAL. Se usan los mismos ID, nombres en español, eje y lado del documento.
 - **Marcas:** cada una de las 42 pieza-posición existe en OEM y en GM, así que el catálogo de precios tiene 84 registros.
-- **Precios en centavos**, para poder probar en producción: pieza OEM = $0.02, pieza GM = $0.01, mano de obra = $0.01 por falla.
+- **Precios:** las pantallas muestran **precios de referencia reales** (pieza OEM, pieza GM y mano de obra sugerida por tipo de pieza; `PRECIOS_REFERENCIA` en `frontend/lib/catalogo.ts` y paso 10 de `docs/base-de-datos.md`), pero **cada orden cobra $0.01 por CoDi** (cobro de prueba del hackatón). `orden.monto_centavos` es el total que se muestra; `orden.monto_cobro_centavos` es lo que se cobra, el `amount` del QR y lo que se valida contra el webhook. Junto a cada total que lleve a un pago se muestra el aviso `CobroPrueba`. Para cobrar el precio real basta cambiar `monto_a_cobrar()` en la base.
 
 ## 6. API de pey (CoDi): condiciones del hackatón
 

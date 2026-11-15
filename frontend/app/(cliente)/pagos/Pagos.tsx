@@ -10,6 +10,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import Aviso from "@/components/Aviso";
+import CobroPrueba from "@/components/cliente/CobroPrueba";
 import CodigoQR from "@/components/cliente/CodigoQR";
 import { TituloPantalla } from "@/components/cliente/EncabezadoCliente";
 import { EstadoCarga, useCliente, type Pedido } from "@/components/cliente/EstadoCliente";
@@ -305,6 +306,7 @@ function ModalQR({
           <p className="mt-4 font-titulo text-[30px] leading-none font-semibold text-tinta">{dinero(orden.monto)}</p>
           <p className="mt-2 text-[15px] text-[#166534]">Recibimos el pago de {formatoPlaca(orden.placa)}. Tu reparación ya está en turno.</p>
         </div>
+        <CobroPrueba cobro={orden.cobro} pagado className="mt-3" />
         <button
           type="button"
           onClick={() => router.replace(`/pagos?orden=${orden.idOrden}`, { scroll: false })}
@@ -331,13 +333,14 @@ function ModalQR({
 
       <div className="mt-5 flex items-end justify-between border-b border-borde pb-4">
         <div>
-          <p className="text-xs text-suave">Total a pagar</p>
+          <p className="text-xs text-suave">Total del servicio</p>
           <p className="font-titulo text-[34px] leading-none font-semibold">
             {dinero(orden.monto)} <span className="text-sm text-suave">MXN</span>
           </p>
         </div>
         <Placa placa={orden.placa} tamano="sm" />
       </div>
+      <CobroPrueba cobro={orden.cobro} className="mt-3" />
 
       <dl className="mt-4 grid grid-cols-2 gap-4 text-[15px]">
         <div>

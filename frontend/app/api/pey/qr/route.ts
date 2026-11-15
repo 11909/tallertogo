@@ -3,7 +3,8 @@ import { crearClienteServidor } from "@/lib/supabase/servidor";
 
 type OrdenQr = {
   id_orden: number;
-  monto_centavos: number;
+  monto_centavos: number; // total que se muestra
+  monto_cobro_centavos: number; // lo que se cobra por CoDi (paso 10): $0.01 en el hackatón
   estado: string;
   codi_qr_id: string | null;
   qr_string: string | null;
@@ -52,7 +53,7 @@ export async function POST(request: Request) {
 
   const { data: orden, error: errorOrden } = await supabase
     .from("orden")
-    .select("id_orden, monto_centavos, estado, codi_qr_id, qr_string, expira_en, folio")
+    .select("id_orden, monto_centavos, monto_cobro_centavos, estado, codi_qr_id, qr_string, expira_en, folio")
     .eq("id_orden", Number(idOrden))
     .maybeSingle();
   if (errorOrden) {
@@ -74,7 +75,7 @@ export async function POST(request: Request) {
   if (fila.estado !== "pendiente" || new Date(fila.expira_en).getTime() <= Date.now()) {
     return respuesta("La orden ya no está vigente. Genera un QR nuevo desde Pagos.", 409);
   }
-  if (!Number.isSafeInteger(fila.monto_centavos) || fila.monto_centavos <= 0) {
+  if (!Number.isSafeInteger(fila.monto_cobro_centavos) || fila.monto_cobro_centavos <= 0) {
     return respuesta("El importe de la orden no es válido.", 409);
   }
   if (!process.env.PEY_API_KEY) return respuesta("Falta configurar PEY_API_KEY en el servidor.", 503);
@@ -136,7 +137,8 @@ export async function POST(request: Request) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        amount: fila.monto_centavos / 100,
+        // Se cobra monto_cobro_centavos ($0.01 en el hackatón), no el total que se muestra en pantalla
+        amount: fila.monto_cobro_centavos / 100,
         concept: `TallerToGo DG-${String(fila.folio).padStart(5, "0")}`,
         expiration: 600,
         numRef: String(fila.id_orden),

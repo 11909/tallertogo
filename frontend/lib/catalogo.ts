@@ -5,8 +5,44 @@ export type Lado = "IZQUIERDO" | "DERECHO" | "CENTRAL";
 
 export type PiezaCatalogo = { id: string; nombre: string; nombreTecnico: string; eje: Eje; lado: Lado; nota: string };
 
-// Precios de la demo en pesos (sección 5 del CLAUDE.md)
-export const PRECIO_DEMO = { OEM: 0.02, GM: 0.01, manoDeObra: 0.01 };
+// Precios de referencia en pesos por tipo de pieza (los primeros 10 caracteres del ID, p. ej. "SUS-DEL-05"):
+// pieza en OEM y en GM, y la mano de obra sugerida que el mecánico puede cambiar.
+// Son los mismos valores del paso 10 de docs/base-de-datos.md: si cambias uno, cambia el otro.
+// Se MUESTRAN estos precios, pero por CoDi cada orden cobra COBRO_PRUEBA_CENTAVOS (sección 5 del CLAUDE.md).
+type PrecioReferencia = { OEM: number; GM: number; manoDeObra: number };
+export const PRECIOS_REFERENCIA: Record<string, PrecioReferencia> = {
+  "SUS-DEL-01": { OEM: 9800, GM: 7900, manoDeObra: 1400 },
+  "SUS-DEL-02": { OEM: 12500, GM: 9900, manoDeObra: 1600 },
+  "SUS-DEL-03": { OEM: 2900, GM: 2200, manoDeObra: 1200 },
+  "SUS-DEL-04": { OEM: 14800, GM: 11900, manoDeObra: 2200 },
+  "SUS-DEL-05": { OEM: 32500, GM: 26000, manoDeObra: 1800 },
+  "SUS-DEL-06": { OEM: 3400, GM: 2700, manoDeObra: 1500 },
+  "SUS-DEL-07": { OEM: 8900, GM: 7100, manoDeObra: 1900 },
+  "SUS-DEL-08": { OEM: 1250, GM: 950, manoDeObra: 700 },
+  "SUS-DEL-09": { OEM: 1850, GM: 1450, manoDeObra: 650 },
+  "SUS-DEL-10": { OEM: 4600, GM: 3700, manoDeObra: 600 },
+  "SUS-DEL-11": { OEM: 48000, GM: 39000, manoDeObra: 6500 },
+  "SUS-TRA-01": { OEM: 9200, GM: 7400, manoDeObra: 1400 },
+  "SUS-TRA-02": { OEM: 13200, GM: 10500, manoDeObra: 1700 },
+  "SUS-TRA-03": { OEM: 2900, GM: 2200, manoDeObra: 1200 },
+  "SUS-TRA-04": { OEM: 3600, GM: 2900, manoDeObra: 900 },
+  "SUS-TRA-05": { OEM: 15900, GM: 12700, manoDeObra: 2400 },
+  "SUS-TRA-06": { OEM: 32500, GM: 26000, manoDeObra: 1800 },
+  "SUS-TRA-07": { OEM: 3400, GM: 2700, manoDeObra: 1500 },
+  "SUS-TRA-08": { OEM: 8400, GM: 6700, manoDeObra: 1900 },
+  "SUS-TRA-09": { OEM: 1250, GM: 950, manoDeObra: 700 },
+  "SUS-TRA-10": { OEM: 1850, GM: 1450, manoDeObra: 650 },
+  "SUS-TRA-11": { OEM: 4600, GM: 3700, manoDeObra: 600 },
+  "SUS-TRA-12": { OEM: 52000, GM: 42000, manoDeObra: 7200 },
+};
+
+export function precioReferencia(idPieza: string): PrecioReferencia {
+  return PRECIOS_REFERENCIA[idPieza.slice(0, 10)] ?? { OEM: 0, GM: 0, manoDeObra: 0 };
+}
+
+// Lo que de verdad se cobra por CoDi en cada orden: $0.01 (cobro de prueba del hackatón; los pagos no se devuelven).
+// En la base lo decide monto_a_cobrar() (paso 10); esta constante solo es para mostrarlo antes de crear la orden.
+export const COBRO_PRUEBA_CENTAVOS = 1;
 
 export const CATALOGO: PiezaCatalogo[] = [
   { id: "SUS-DEL-01-IZQ", nombre: "Horquilla superior delantera izquierda", nombreTecnico: "Front Left Upper Control Arm", eje: "DELANTERO", lado: "IZQUIERDO", nota: "Aluminio forjado (incluye bujes y rótula integrada)" },

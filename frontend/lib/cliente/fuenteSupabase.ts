@@ -1,5 +1,5 @@
 // Fuente de datos SUPABASE para las pantallas del cliente.
-// Necesita el SQL del paso 9 de docs/base-de-datos.md (cerrar diagnóstico, historial de QR y v_orden_cliente).
+// Necesita el SQL de los pasos 9 y 10 de docs/base-de-datos.md (cerrar diagnóstico, historial de QR, v_orden_cliente y cobro de prueba).
 // Se activa con NEXT_PUBLIC_DATOS_CLIENTE=supabase en frontend/.env.local.
 import type {
   AutoCliente,
@@ -53,6 +53,7 @@ type FilaOrden = {
   color: string;
   estado: EstadoOrden;
   monto_centavos: number;
+  monto_cobro_centavos: number; // paso 10: lo que se cobra por CoDi ($0.01)
   qr_string: string | null;
   expira_en: string;
   fecha_creacion: string;
@@ -194,6 +195,7 @@ export const fuenteSupabase: FuenteCliente = {
             color: f.color,
             estado: f.estado,
             monto: f.monto_centavos,
+            cobro: f.monto_cobro_centavos,
             qrString: f.qr_string,
             expiraEn: f.expira_en,
             creadaEn: f.fecha_creacion,

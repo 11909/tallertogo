@@ -106,7 +106,7 @@ export default function Carrito() {
   const elegidas = fallas.filter((f) => enCarrito[f.piezaId]);
   const pendientes = fallas.filter((f) => !enCarrito[f.piezaId]);
 
-  const totalPiezas = elegidas.reduce((s, f) => s + centavos(precioPieza(enCarrito[f.piezaId])), 0);
+  const totalPiezas = elegidas.reduce((s, f) => s + centavos(precioPieza(f.piezaId, enCarrito[f.piezaId])), 0);
   const totalManoDeObra = elegidas.reduce((s, f) => s + centavos(f.manoDeObra), 0);
   const total = totalPiezas + totalManoDeObra;
 
@@ -164,7 +164,7 @@ export default function Carrito() {
 
             {elegidas.map((f) => {
               const marca = enCarrito[f.piezaId];
-              const pieza = centavos(precioPieza(marca));
+              const pieza = centavos(precioPieza(f.piezaId, marca));
               const mano = centavos(f.manoDeObra);
               return (
                 <div
