@@ -1,6 +1,6 @@
 "use client";
 
-// Barra superior del cliente + pestañas Mis autos | Carrito | Pagos
+// Barra superior del cliente + pestañas Mis autos | Carrito | Pagos. El nombre lleva a Mi perfil (/perfil).
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import BarraSuperior from "@/components/BarraSuperior";
@@ -22,13 +22,22 @@ export default function EncabezadoCliente() {
       <BarraSuperior
         derecha={
           <div className="flex items-center gap-3 text-sm text-suave">
-            <span className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-tinta text-[13px] font-semibold text-acento">
-              {usuario.iniciales}
-            </span>
-            <span className="leading-tight">
-              <span className="block font-semibold text-tinta">{usuario.nombre}</span>
-              <span className="text-xs">Cliente</span>
-            </span>
+            <Link
+              href="/perfil"
+              aria-current={ruta === "/perfil" ? "page" : undefined}
+              title="Mi perfil"
+              className={`flex items-center gap-3 rounded-full border py-1 pr-3 pl-1 hover:border-tinta ${
+                ruta === "/perfil" ? "border-tinta bg-fondo" : "border-transparent"
+              }`}
+            >
+              <span className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-tinta text-[13px] font-semibold text-acento">
+                {usuario.iniciales}
+              </span>
+              <span className="leading-tight">
+                <span className="block font-semibold text-tinta">{usuario.nombre}</span>
+                <span className="text-xs">Cliente · Mi perfil</span>
+              </span>
+            </Link>
             <button
               type="button"
               onClick={salir}

@@ -317,6 +317,24 @@ Si el correo ya existe en Auth pero no tiene perfil (un registro que se quedó a
 
 La política RLS `perfil_registrar` solo deja crear el perfil propio, con rol `cliente` o `mecanico`, y exige que exista la sesión al insertarlo. Para la demo, desactiven la confirmación de correo en la configuración de Auth de Supabase; si no, `signUp` no deja sesión y el `insert` falla.
 
+**Mi perfil (`/perfil`, solo cliente)**
+
+| Dato en pantalla | Columna |
+|---|---|
+| Nombre, apellidos y teléfono (editables) | `perfil.nombre`, `apellido_paterno`, `apellido_materno`, `telefono` |
+| Correo (solo lectura: es con el que inicia sesión) | `perfil.correo` |
+| Nueva contraseña | `auth.users`, con `supabase.auth.updateUser` |
+
+```js
+const { data } = await supabase.from('perfil')
+  .update({ nombre, apellido_paterno, apellido_materno: apellido_materno || null, telefono: telefono.replace(/\D/g, '') })
+  .eq('id_perfil', user.id).select('id_perfil');
+// data vacío = la base no dejó editar (falta el paso 8 o el usuario es mecánico)
+await supabase.auth.updateUser({ password: nueva });
+```
+
+La política `perfil_editar_cliente` (paso 8) solo deja que **el cliente** edite **su propio** perfil, y solo nombre, apellidos y teléfono. **El mecánico no puede editar su perfil**: sus datos son del trabajo, así que su pantalla de perfil es de solo lectura. El rol y el correo no los puede cambiar nadie desde la app.
+
 **Registro de auto**
 
 ```js
@@ -1000,8 +1018,25 @@ left join orden o          on o.id_orden = od.id_orden
 where d.estado <> 'borrador';
 ```
 
+### Paso 8: el cliente edita su perfil
+
+Se puede correr más de una vez. Sin este paso, Mi perfil no guarda cambios (la base no actualiza nada).
+
+```sql
+-- Solo nombre, apellidos y teléfono se pueden cambiar (no el rol, el correo ni el id).
+revoke update on perfil from anon, authenticated;
+grant update (nombre, apellido_paterno, apellido_materno, telefono) on perfil to authenticated;
+
+-- Solo el cliente edita su propio perfil; el mecánico no (sus datos son del trabajo).
+drop policy if exists perfil_editar_cliente on perfil;
+create policy perfil_editar_cliente on perfil for update
+  using (id_perfil = auth.uid() and rol = 'cliente')
+  with check (id_perfil = auth.uid() and rol = 'cliente');
+```
+
 ## 10. Pendientes
 
 - [ ] Correr el SQL en el proyecto de Supabase.
 - [ ] Si la base ya estaba creada antes de la descripción general, los turnos y la línea de tiempo: correr el **paso 7**.
+- [ ] Correr el **paso 8** para que el cliente pueda editar su perfil (el mecánico no puede).
 - [ ] Decidir si se fuerza el orden de los estados del diagnóstico con un trigger (hoy RLS solo impide que el mecánico ponga `pagado`).
