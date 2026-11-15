@@ -22,7 +22,9 @@ Modelo de datos de TallerToGo: modelo E-R, paso a tablas, diccionario de datos, 
 - Hasta **20 autos por cliente**, cada uno con placa única y uno de los **10 colores de fábrica** del Z06 2025. No se pide VIN. Cada auto tiene sus propios diagnósticos, órdenes y seguimiento.
 - 42 piezas-posición del catálogo (`docs/catalogo-suspension-corvette-z06.md`), cada una independiente (`SUS-DEL-05-IZQ` y `SUS-DEL-05-DER` son piezas distintas). Todas pertenecen al sistema Suspensión; la tabla `sistema` deja listo agregar otros.
 - Dos marcas de refacción, **OEM** y **GM**, cada pieza con su precio en cada marca (84 precios). Demo: OEM = 2 ¢, GM = 1 ¢, mano de obra = 1 ¢ por falla.
-- El mecánico registra cada **falla** (una pieza-posición defectuosa) con su descripción y su mano de obra. Una pieza-posición aparece a lo más una vez por diagnóstico.
+- El mecánico escribe **una descripción general por diagnóstico** (qué síntomas tiene el auto y qué encontró) y registra cada **falla** (una pieza-posición defectuosa) con su mano de obra. Una pieza-posición aparece a lo más una vez por diagnóstico.
+- **Turnos:** el mecánico diagnostica por **orden de llegada** (`carro.fecha_registro`) y repara por **orden de pago** (`orden.fecha_pago` de la primera orden pagada).
+- **Línea de tiempo:** cada cambio de estado del diagnóstico guarda su hora (`fecha_envio`, `fecha_reparacion`, `fecha_listo`, `fecha_entrega`). Las pone un trigger.
 - El cliente solo ve diagnósticos **enviados** de sus autos.
 - **Compras parciales:** el cliente compra desde la vista del diagnóstico, eligiendo qué fallas pagar y la marca de cada una. Un diagnóstico puede pagarse en **varias órdenes** (mientras esté en `enviado` o `pagado`), pero **cada falla se compra una sola vez**. Si deja fallas sin elegir, la app muestra un modal ("Aún te faltan piezas del diagnóstico por comprar; podrás pagarlas después. ¿Quieres continuar?"). Cuando el diagnóstico pasa a `en_reparacion`, las fallas sin comprar quedan como `no_comprada`.
 - Pago con CoDi vía pey. **Solo el webhook marca una orden como pagada.** Un pago repetido se ignora. **No hay reembolsos:** un pago a un QR cancelado o vencido, tardío o con otro monto queda como `rechazado` (registrado, pero no se aplica).
@@ -36,9 +38,9 @@ Solo entidades del minimundo. `/atributo` = derivado (no se guarda); la sangría
 | Usuario (superclase) | **id_usuario**, correo_electronico, contraseña, nombre_completo (nombre, apellido_paterno, apellido_materno), num_telefono, rol |
 | Cliente (subclase de Usuario) | hereda todo de Usuario |
 | Mecánico (subclase de Usuario) | hereda todo de Usuario |
-| Carro | **id_carro**, placa (única), color |
-| Diagnóstico | **folio**, estado, fecha_creacion, fecha_envio, /total |
-| Falla | **id_falla**, descripcion, mano_obra, /estado_falla |
+| Carro | **id_carro**, placa (única), color, fecha_registro |
+| Diagnóstico | **folio**, estado, descripcion, fecha_creacion, fecha_envio, fecha_reparacion, fecha_listo, fecha_entrega, /total |
+| Falla | **id_falla**, nota (opcional), mano_obra, /estado_falla |
 | Pieza | **id_pieza**, nombre, nombre_tecnico, posicion (eje, lado) |
 | Sistema | **id_sistema**, nombre |
 | Marca de refacción | **id_marca**, nombre |
@@ -98,6 +100,7 @@ Tipos de PostgreSQL. **PK** = llave primaria, **FK** = llave foránea, **UQ** = 
 | id_cliente | uuid | no | FK → `perfil.id_perfil` | Dueño del auto |
 | placa | varchar(10) | no | UQ | |
 | color | varchar(40) | no | | Uno de los 10 colores de fábrica (`check`): Arctic White, Black, Competition Yellow Tintcoat Metallic, Hysteria Purple Metallic, Rapid Blue, Red Mist Metallic Tintcoat, Riptide Blue Metallic, Sea Wolf Gray Tricoat, Sebring Orange Tintcoat, Torch Red |
+| fecha_registro | timestamptz | no | | Default `now()`. Define el **turno de diagnóstico** (orden de llegada) |
 
 Marca, modelo y año: constantes de la app (Chevrolet Corvette Z06 2025). Máximo 20 autos por cliente (trigger `carro_limite_autos`) y solo clientes (política RLS `carro_registrar`).
 
@@ -143,8 +146,12 @@ Marca, modelo y año: constantes de la app (Chevrolet Corvette Z06 2025). Máxim
 | id_carro | int | no | FK → `carro.id_carro` | |
 | id_mecanico | uuid | no | FK → `perfil.id_perfil` | |
 | estado | varchar(13) | no | | `borrador` → `enviado` → `pagado` → `en_reparacion` → `listo` → `entregado`. `pagado` solo lo pone el webhook |
+| descripcion | text | sí | | **Descripción general de la falla** que escribe el mecánico (una por diagnóstico). Obligatoria para salir de `borrador` (`check`) |
 | fecha_creacion | timestamptz | no | | Default `now()` |
-| fecha_envio | timestamptz | sí | | Se llena al enviar al cliente |
+| fecha_envio | timestamptz | sí | | Al pasar a `enviado` (la pone el trigger `diagnostico_fechas` si la app no la manda) |
+| fecha_reparacion | timestamptz | sí | | Al pasar a `en_reparacion` (trigger `diagnostico_fechas`) |
+| fecha_listo | timestamptz | sí | | Al pasar a `listo` (trigger `diagnostico_fechas`) |
+| fecha_entrega | timestamptz | sí | | Al pasar a `entregado` (trigger `diagnostico_fechas`) |
 
 ### falla — cada pieza defectuosa que registra el mecánico
 
@@ -153,7 +160,7 @@ Marca, modelo y año: constantes de la app (Chevrolet Corvette Z06 2025). Máxim
 | id_falla | int (identity) | no | PK | |
 | folio | int | no | FK → `diagnostico.folio` (cascade) | |
 | id_pieza | varchar(16) | no | FK → `pieza.id_pieza` | |
-| descripcion | text | no | | Qué encontró el mecánico |
+| descripcion | text | sí | | Nota opcional de esa falla. La pantalla usa la descripción general (`diagnostico.descripcion`) |
 | mano_obra_centavos | int | no | | ≥ 0; solo se cobra si el cliente compra la falla |
 
 Restricción: `UNIQUE (folio, id_pieza)`.
@@ -190,6 +197,9 @@ Restricción: `UNIQUE (folio, id_pieza)`.
 | Contraseña | Solo en Supabase Auth |
 | Total de un diagnóstico o carrito | Σ (`precio_pieza.precio_centavos` + `falla.mano_obra_centavos`) de lo elegido; columna `subtotal_centavos` de las vistas |
 | Estado de cada falla | `v_diagnostico_cliente.estado_falla`: `disponible`, `en_pago`, `pagada` o `no_comprada` (diagnóstico ya en reparación) |
+| Turno de diagnóstico | Posición del auto entre los que esperan diagnóstico (sin diagnóstico o en `borrador`), ordenados por `carro.fecha_registro` |
+| Turno de reparación | Posición del diagnóstico entre los `pagado`, ordenados por la primera `orden.fecha_pago` pagada |
+| Folio que se muestra | `'DG-' + folio` con 5 dígitos, p. ej. `DG-00042` |
 | `numRef` para pey | `id_orden` como texto |
 
 ## 5. Conexiones entre tablas
@@ -251,7 +261,7 @@ El nombre de la restricción sigue la convención de PostgreSQL (`<tabla>_<colum
 
 | Objeto | Tipo | Quién lo usa | Qué hace / devuelve |
 | --- | --- | --- | --- |
-| `v_diagnostico_cliente` | vista | cliente | Una fila por **falla × marca** de los diagnósticos no borrador: folio, `estado_diagnostico`, `fecha_envio`, placa, color, `mecanico`, `id_falla`, `sistema`, `id_pieza`, `pieza`, `eje`, `lado`, `descripcion`, `id_marca`, `marca`, `nombre_comercial`, `precio_centavos`, `mano_obra_centavos`, `subtotal_centavos`, `estado_falla` |
+| `v_diagnostico_cliente` | vista | cliente | Una fila por **falla × marca** de los diagnósticos no borrador: folio, `estado_diagnostico`, `descripcion_general`, `fecha_envio`, placa, color, `mecanico`, `id_falla`, `sistema`, `id_pieza`, `pieza`, `eje`, `lado`, `descripcion`, `id_marca`, `marca`, `nombre_comercial`, `precio_centavos`, `mano_obra_centavos`, `subtotal_centavos`, `estado_falla` |
 | `v_ticket` | vista | cliente, mecánico | Una fila por falla comprada de órdenes `pagado`: `num_ticket`, `transaction_id`, `fecha_pago`, `monto_centavos`, folio, placa, `cliente`, `mecanico`, `sistema`, `id_pieza`, `pieza`, `eje`, `lado`, `marca`, `precio_centavos`, `mano_obra_centavos`, `subtotal_centavos` |
 | `crear_orden(p_folio int, p_lineas jsonb)` | función (RPC) | cliente, **con su sesión** (usa `auth.uid()`) | Valida que el diagnóstico sea suyo y esté en `enviado` o `pagado`, cancela un QR pendiente anterior, rechaza fallas ya pagadas, calcula el monto y crea la orden con sus líneas. Devuelve `id_orden`. `p_lineas = [{ "id_falla": 7, "id_marca": 1 }, …]` |
 | `registrar_pago(p_codi_qr_id, p_transaction_id, p_monto_centavos, p_fecha_pago)` | función | solo el servidor (service role), desde el webhook | Devuelve `'pagado'`, `'repetido'`, `'rechazado'` o `'desconocido'` |
@@ -326,16 +336,17 @@ const { error } = await supabase.rpc('eliminar_carro', { p_id_carro: 4 });
 **Lista de autos y diagnósticos**
 
 ```js
-// Diagnósticos con su auto y su cliente (más recientes primero)
-const { data } = await supabase.from('diagnostico')
-  .select(`folio, estado, fecha_creacion, fecha_envio,
-           carro ( id_carro, placa, color,
-                   cliente:perfil!carro_id_cliente_fkey ( nombre, apellido_paterno, telefono, correo ) )`)
-  .order('fecha_creacion', { ascending: false });
-
-// Autos registrados (para iniciar un diagnóstico nuevo)
+// Pantalla 4 (Autos por atender): un renglón por auto, con su último diagnóstico y sus pagos.
+// La pantalla muestra placas, color y folio; NO los datos del cliente.
 const { data: autos } = await supabase.from('carro')
-  .select('id_carro, placa, color, cliente:perfil!carro_id_cliente_fkey ( nombre, apellido_paterno )');
+  .select(`id_carro, placa, color, fecha_registro,
+           diagnostico ( folio, estado, fecha_creacion, fecha_envio,
+                         fecha_reparacion, fecha_listo, fecha_entrega,
+                         orden ( estado, fecha_pago ) )`);
+// Etapa en pantalla: sin diagnóstico o 'borrador' → "Por diagnosticar"; 'enviado' → "Esperando pago";
+//                    'pagado', 'en_reparacion', 'listo', 'entregado' → igual.
+// Turno de diagnóstico: ordenar los "Por diagnosticar" por fecha_registro (el más antiguo es el turno 1).
+// Turno de reparación:  ordenar los 'pagado' por la primera orden.fecha_pago con estado 'pagado'.
 
 // Crear diagnóstico (queda en 'borrador')
 const { data: diag } = await supabase.from('diagnostico')
@@ -348,7 +359,8 @@ const { data: diag } = await supabase.from('diagnostico')
 | --- | --- |
 | Buscador de piezas | `pieza` (`id_pieza`, `nombre`, `nombre_tecnico`, `eje`, `lado`) + `sistema.nombre` |
 | Fallas ya capturadas | `falla` del folio + `pieza` |
-| Descripción y mano de obra | `falla.descripcion`, `falla.mano_obra_centavos` (1 en la demo) |
+| Descripción general | `diagnostico.descripcion` (una por diagnóstico) |
+| Mano de obra de cada falla | `falla.mano_obra_centavos` (1 en la demo) |
 
 ```js
 const { data: catalogo } = await supabase.from('pieza')
@@ -360,17 +372,33 @@ const { data: fallas } = await supabase.from('falla')
   .eq('folio', folio);
 // Ocultar del buscador las piezas que ya están en `fallas` (UNIQUE folio + id_pieza)
 
-await supabase.from('falla').insert({ folio, id_pieza, descripcion, mano_obra_centavos: 1 });
+await supabase.from('falla').insert({ folio, id_pieza, mano_obra_centavos: 1 });   // sin descripción por falla
+await supabase.from('diagnostico').update({ descripcion }).eq('folio', folio);     // descripción general
 await supabase.from('falla').delete().eq('id_falla', id_falla); // solo mientras está en borrador
 ```
 
 **Enviar diagnóstico y avanzar la reparación**
 
 ```js
-await supabase.from('diagnostico')
-  .update({ estado: 'enviado', fecha_envio: new Date().toISOString() }).eq('folio', folio);
+// Enviar: necesita la descripción general (si falta, el check diagnostico_descripcion_al_enviar lo rechaza)
+await supabase.from('diagnostico').update({ estado: 'enviado' }).eq('folio', folio);
 // Después del pago: 'en_reparacion' → 'listo' → 'entregado'. 'pagado' lo pone solo el webhook.
+// Las fechas (fecha_envio, fecha_reparacion, fecha_listo, fecha_entrega) las pone el trigger diagnostico_fechas.
 await supabase.from('diagnostico').update({ estado: 'en_reparacion' }).eq('folio', folio);
+```
+
+**Ver diagnóstico (solo lectura, con línea de tiempo)**
+
+```js
+const { data: diag } = await supabase.from('diagnostico')
+  .select(`folio, estado, descripcion, fecha_envio, fecha_reparacion, fecha_listo, fecha_entrega,
+           carro ( placa, color, fecha_registro ),
+           falla ( id_falla, mano_obra_centavos, pieza ( id_pieza, nombre, eje, lado ) ),
+           orden ( id_orden, estado, fecha_pago, monto_centavos, orden_detalle ( id_falla, id_marca ) )`)
+  .eq('folio', folio).single();
+// Línea de tiempo: carro.fecha_registro → fecha_envio → orden.fecha_pago (pagadas) →
+//                  fecha_reparacion → fecha_listo → fecha_entrega.
+// Marca elegida y total pagado: v_ticket del folio (o orden_detalle + precio_pieza).
 ```
 
 ### Cliente
@@ -390,7 +418,8 @@ const { data } = await supabase.from('diagnostico')
 | --- | --- |
 | Mecánico que hizo el diagnóstico | `mecanico` |
 | Auto | `placa`, `color` (+ modelo fijo) |
-| Cada falla y su ubicación | `id_falla`, `pieza`, `id_pieza`, `eje`, `lado`, `sistema`, `descripcion` |
+| "Lo que encontró el mecánico" | `descripcion_general` (igual en todas las filas del folio) |
+| Cada falla y su ubicación | `id_falla`, `pieza`, `id_pieza`, `eje`, `lado`, `sistema` |
 | Precio por marca | `id_marca`, `marca`, `precio_centavos` (una fila por marca) |
 | Mano de obra | `mano_obra_centavos` |
 | Subtotal de la opción | `subtotal_centavos` |
@@ -506,7 +535,8 @@ create table carro (
                 'Arctic White', 'Black', 'Competition Yellow Tintcoat Metallic',
                 'Hysteria Purple Metallic', 'Rapid Blue', 'Red Mist Metallic Tintcoat',
                 'Riptide Blue Metallic', 'Sea Wolf Gray Tricoat', 'Sebring Orange Tintcoat',
-                'Torch Red'))
+                'Torch Red')),
+  fecha_registro timestamptz not null default now()   -- turno de diagnóstico (orden de llegada)
 );
 
 -- Máximo 20 autos por cliente. Es un trigger (y no solo RLS) porque revisa auto por auto,
@@ -557,15 +587,37 @@ create table diagnostico (
   id_mecanico     uuid not null references perfil(id_perfil),
   estado          varchar(13) not null default 'borrador'
     check (estado in ('borrador','enviado','pagado','en_reparacion','listo','entregado')),
+  descripcion     text,                              -- descripción general de la falla (una por diagnóstico)
   fecha_creacion  timestamptz not null default now(),
-  fecha_envio     timestamptz
+  fecha_envio     timestamptz,
+  fecha_reparacion timestamptz,
+  fecha_listo     timestamptz,
+  fecha_entrega   timestamptz,
+  constraint diagnostico_descripcion_al_enviar
+    check (estado = 'borrador' or nullif(btrim(descripcion), '') is not null)
 );
+
+-- Línea de tiempo: guarda la hora de cada cambio de estado (solo la primera vez)
+create or replace function sellar_fechas_diagnostico() returns trigger
+language plpgsql as $$
+begin
+  if new.estado is distinct from old.estado then
+    if new.estado = 'enviado'       and new.fecha_envio      is null then new.fecha_envio      := now(); end if;
+    if new.estado = 'en_reparacion' and new.fecha_reparacion is null then new.fecha_reparacion := now(); end if;
+    if new.estado = 'listo'         and new.fecha_listo      is null then new.fecha_listo      := now(); end if;
+    if new.estado = 'entregado'     and new.fecha_entrega    is null then new.fecha_entrega    := now(); end if;
+  end if;
+  return new;
+end $$;
+
+create trigger diagnostico_fechas before update on diagnostico
+  for each row execute function sellar_fechas_diagnostico();
 
 create table falla (
   id_falla            int generated always as identity primary key,
   folio               int not null references diagnostico(folio) on delete cascade,
   id_pieza            varchar(16) not null references pieza(id_pieza),
-  descripcion         text not null,
+  descripcion         text,                        -- nota opcional; la general va en diagnostico.descripcion
   mano_obra_centavos  int not null check (mano_obra_centavos >= 0),
   unique (folio, id_pieza)            -- cada pieza-posición una sola vez por diagnóstico
 );
@@ -738,7 +790,8 @@ select d.folio, d.estado as estado_diagnostico, d.fecha_envio,
        case when o.estado = 'pagado'    then 'pagada'
             when o.estado = 'pendiente' then 'en_pago'
             when d.estado in ('enviado','pagado') then 'disponible'
-            else 'no_comprada' end as estado_falla
+            else 'no_comprada' end as estado_falla,
+       d.descripcion as descripcion_general
 from diagnostico d
 join carro c            on c.id_carro = d.id_carro
 join perfil m           on m.id_perfil = d.id_mecanico
@@ -874,7 +927,81 @@ revoke execute on function carros_eliminables(), eliminar_carro(int) from public
 grant execute on function carros_eliminables(), eliminar_carro(int) to authenticated;
 ```
 
+### Paso 7: migración si ya corrieron los pasos 1 a 6
+
+Agrega la descripción general por diagnóstico, la hora de registro de cada auto (turnos) y las fechas de la línea de tiempo. Solo hace falta si la base ya existía antes de estos cambios; en una base nueva ya vienen en los pasos 1 y 4.
+
+```sql
+-- Turnos de diagnóstico (orden de llegada). Los autos que ya existían quedan con la hora de la migración.
+alter table carro add column if not exists fecha_registro timestamptz not null default now();
+
+-- Descripción general por diagnóstico y fechas de la línea de tiempo
+alter table diagnostico
+  add column if not exists descripcion      text,
+  add column if not exists fecha_reparacion timestamptz,
+  add column if not exists fecha_listo      timestamptz,
+  add column if not exists fecha_entrega    timestamptz;
+
+-- Diagnósticos ya enviados: usar sus descripciones por falla como descripción general
+update diagnostico d
+   set descripcion = s.texto
+  from (select folio, string_agg(descripcion, ' ' order by id_falla) as texto
+          from falla where descripcion is not null group by folio) s
+ where s.folio = d.folio and d.descripcion is null;
+
+alter table diagnostico drop constraint if exists diagnostico_descripcion_al_enviar;
+alter table diagnostico
+  add constraint diagnostico_descripcion_al_enviar
+  check (estado = 'borrador' or nullif(btrim(descripcion), '') is not null);
+
+-- La descripción por falla pasa a ser opcional
+alter table falla alter column descripcion drop not null;
+
+create or replace function sellar_fechas_diagnostico() returns trigger
+language plpgsql as $$
+begin
+  if new.estado is distinct from old.estado then
+    if new.estado = 'enviado'       and new.fecha_envio      is null then new.fecha_envio      := now(); end if;
+    if new.estado = 'en_reparacion' and new.fecha_reparacion is null then new.fecha_reparacion := now(); end if;
+    if new.estado = 'listo'         and new.fecha_listo      is null then new.fecha_listo      := now(); end if;
+    if new.estado = 'entregado'     and new.fecha_entrega    is null then new.fecha_entrega    := now(); end if;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists diagnostico_fechas on diagnostico;
+create trigger diagnostico_fechas before update on diagnostico
+  for each row execute function sellar_fechas_diagnostico();
+
+-- Vista del cliente con la descripción general (columna nueva al final)
+create or replace view v_diagnostico_cliente with (security_invoker = true) as
+select d.folio, d.estado as estado_diagnostico, d.fecha_envio,
+       c.id_cliente, c.placa, c.color,
+       m.nombre || ' ' || m.apellido_paterno as mecanico,
+       f.id_falla, s.nombre as sistema, p.id_pieza, p.nombre as pieza, p.eje, p.lado, f.descripcion,
+       mr.id_marca, mr.nombre as marca, pp.nombre_comercial,
+       pp.precio_centavos, f.mano_obra_centavos,
+       pp.precio_centavos + f.mano_obra_centavos as subtotal_centavos,
+       case when o.estado = 'pagado'    then 'pagada'
+            when o.estado = 'pendiente' then 'en_pago'
+            when d.estado in ('enviado','pagado') then 'disponible'
+            else 'no_comprada' end as estado_falla,
+       d.descripcion as descripcion_general
+from diagnostico d
+join carro c            on c.id_carro = d.id_carro
+join perfil m           on m.id_perfil = d.id_mecanico
+join falla f            on f.folio = d.folio
+join pieza p            on p.id_pieza = f.id_pieza
+join sistema s          on s.id_sistema = p.id_sistema
+join precio_pieza pp    on pp.id_pieza = f.id_pieza
+join marca_refaccion mr on mr.id_marca = pp.id_marca
+left join orden_detalle od on od.id_falla = f.id_falla
+left join orden o          on o.id_orden = od.id_orden
+where d.estado <> 'borrador';
+```
+
 ## 10. Pendientes
 
 - [ ] Correr el SQL en el proyecto de Supabase.
+- [ ] Si la base ya estaba creada antes de la descripción general, los turnos y la línea de tiempo: correr el **paso 7**.
 - [ ] Decidir si se fuerza el orden de los estados del diagnóstico con un trigger (hoy RLS solo impide que el mecánico ponga `pagado`).

@@ -66,6 +66,8 @@ No se agregan otros lenguajes ni frameworks. Se descartó Python/Django para no 
   - `lado`: `IZQUIERDO` (lado del conductor, LH), `DERECHO` (lado del pasajero, RH) o `CENTRAL`.
 - **Unicidad:** cada pieza-posición existe **una sola vez** por vehículo. Por eso, la cantidad de cada falla siempre es 1, y en un mismo diagnóstico no se repite la misma pieza-posición.
 - **Mano de obra por falla**, no un total único. Solo se cobra si el cliente compra la pieza de esa falla.
+- **Turnos del taller:** el mecánico **diagnostica por orden de llegada** (hora de registro del auto, `carro.fecha_registro`) y **repara por orden de pago** (`orden.fecha_pago`). En la lista del mecánico, el turno 1 de diagnóstico lleva el botón amarillo y el turno 1 de reparación la etiqueta "Siguiente".
+- **Descripción general:** el mecánico escribe una sola descripción por diagnóstico (`diagnostico.descripcion`), obligatoria para enviarlo. La línea de tiempo guarda la hora de cada etapa (`fecha_envio`, `fecha_reparacion`, `fecha_listo`, `fecha_entrega`).
 - **El cliente solo puede comprar las piezas que diagnosticó el mecánico.** No puede agregar piezas por su cuenta.
 - **Compras parciales:** el cliente compra desde la vista del diagnóstico y puede pagarlo en **varias órdenes** (mientras el diagnóstico esté en `enviado` o `pagado`), pero **cada falla se compra una sola vez**. Si deja fallas sin elegir, la app muestra un modal de confirmación ("Aún te faltan piezas del diagnóstico por comprar; podrás pagarlas después"). Con el diagnóstico en `en_reparacion`, las fallas sin comprar quedan como no compradas.
 - El cliente **solo ve diagnósticos enviados** (no los borradores) y solo de sus autos.
