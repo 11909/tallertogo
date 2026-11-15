@@ -43,7 +43,7 @@ export default function LoginPage() {
         <p className="text-sm text-suave">Taller especializado en suspensión</p>
 
         <div>
-          <Image src="/paddock-logo.png" alt="Paddock" width={852} height={257} priority className="h-auto w-[440px]" />
+          <Image src="/paddock-logo.png" alt="Paddock" width={440} height={133} priority className="h-auto w-[440px]" />
           <p className="mt-10 max-w-lg font-titulo text-[40px] leading-tight font-semibold">
             Tu carro, diagnosticado pieza por pieza.
           </p>
@@ -69,7 +69,7 @@ export default function LoginPage() {
       <section className="flex items-center justify-center px-8 py-12">
         <div className="w-full max-w-md">
           {/* En pantallas chicas el logo va arriba del formulario */}
-          <Image src="/paddock-logo.png" alt="Paddock" width={852} height={257} className="mx-auto mb-10 h-auto w-64 lg:hidden" />
+          <Image src="/paddock-logo.png" alt="Paddock" width={256} height={77} className="mx-auto mb-10 h-auto w-64 lg:hidden" />
 
           <form onSubmit={entrar} noValidate className="rounded-xl border border-borde bg-tarjeta p-10">
             <h1 className="font-titulo text-[28px] leading-none font-semibold">Entrar</h1>
