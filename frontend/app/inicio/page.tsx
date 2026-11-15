@@ -3,6 +3,10 @@
 // Pantalla 3: Inicio del cliente con el registro de sus autos (diseñada para computadora)
 // - Hasta 20 autos por cliente, cada uno con placas y uno de los 10 colores de fábrica del Corvette Z06 2025.
 // - Si el cliente ya tiene autos, el formulario se abre solo cuando elige "Agregar otro auto".
+// - Un auto se puede eliminar solo si el mecánico aún no empieza su diagnóstico (lo decide la base:
+//   funciones carros_eliminables y eliminar_carro), así que tampoco tiene órdenes ni tickets.
+// - Al eliminar sale un aviso abajo con "Deshacer" (como Gmail): el auto se borra de verdad hasta
+//   que se acaba el tiempo, así el cliente puede arrepentirse.
 // - Cada auto tiene su propio diagnóstico, recibo y seguimiento.
 // Lee el usuario y sus autos de Supabase (tablas perfil, carro y diagnostico) y guarda los autos nuevos.
 // El seguimiento se actualiza en vivo cuando el mecánico cambia un diagnóstico (Supabase Realtime).
@@ -16,6 +20,7 @@ import SeguimientoEnVivo, { Muestra, type AutoSeguimiento, type Etapa } from "@/
 import { COLORES_Z06_2025, buscarColor } from "@/lib/colores";
 import { crearClienteNavegador } from "@/lib/supabase/cliente";
 
+const SEGUNDOS_DESHACER = 6; // tiempo para arrepentirse antes de borrar el auto
 const MAX_AUTOS = 20; // debe coincidir con el trigger carro_limite_autos de la base
 
 // Modelos que atiende el taller (se buscan en el combo "Modelo de tu auto"). Por ahora solo uno;
@@ -29,7 +34,14 @@ const OPCIONES_MODELO: Opcion[] = MODELOS.map((m) => ({
 
 type Usuario = { id: string; nombre: string; iniciales: string };
 // Auto ya guardado en la base (tabla carro). En la base el color se guarda con su nombre oficial.
-type AutoRegistrado = { id: string; placas: string; codigoColor: string; etapa: Etapa };
+type AutoRegistrado = {
+  id: string;
+  idCarro: number;
+  placas: string;
+  codigoColor: string;
+  etapa: Etapa;
+  eliminable: boolean;
+};
 // Auto que el cliente está capturando en el formulario (todavía no se guarda).
 type AutoForm = { id: string; placas: string; color: string };
 type ErroresAuto = { placas?: string; color?: string };
@@ -64,6 +76,12 @@ export default function InicioPage() {
   const [agregando, setAgregando] = useState(false); // el cliente pidió agregar otro auto
   const [modeloId, setModeloId] = useState<string | null>(null); // modelo elegido en el buscador
   const [errorModelo, setErrorModelo] = useState<string>();
+  // Eliminación con "Deshacer": el auto se oculta y se borra en la base cuando vence el tiempo.
+  const [pendiente, setPendiente] = useState<{ auto: AutoRegistrado } | null>(null);
+  const [restanteMs, setRestanteMs] = useState(0);
+  const [mensajeBarra, setMensajeBarra] = useState<string | null>(null); // aviso corto en la barra de abajo
+  const temporizador = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendienteRef = useRef<AutoRegistrado | null>(null);
   const modeloElegido = MODELOS.find((m) => m.id === modeloId);
 
   const disponibles = MAX_AUTOS - registrados.length;
@@ -101,11 +119,20 @@ export default function InicioPage() {
         iniciales: `${perfil.nombre[0] ?? ""}${perfil.apellido_paterno[0] ?? ""}`.toUpperCase(),
       });
 
-      const { data: carros, error } = await supabase
-        .from("carro")
-        .select("id_carro, placa, color, diagnostico ( estado, fecha_creacion )")
-        .eq("id_cliente", user.id)
-        .order("id_carro");
+      const [{ data: carros, error }, { data: eliminables, error: errorEliminables }] = await Promise.all([
+        supabase
+          .from("carro")
+          .select("id_carro, placa, color, diagnostico ( estado, fecha_creacion )")
+          .eq("id_cliente", user.id)
+          .order("id_carro"),
+        // Autos sin ningún diagnóstico (ni borrador, que el cliente no ve): los únicos que puede eliminar
+        supabase.rpc("carros_eliminables"),
+      ]);
+      if (errorEliminables) {
+        // Normalmente significa que falta correr en Supabase el SQL del paso 6 (docs/base-de-datos.md).
+        console.error("[TallerToGo] carros_eliminables (¿falta el paso 6 del SQL?):", errorEliminables);
+      }
+      const idsEliminables = new Set<number>(eliminables ?? []);
       if (error) {
         console.error("[TallerToGo] carros:", error);
         setAviso({ tipo: "error", texto: "No se pudieron cargar tus autos. Recarga la página." });
@@ -114,9 +141,11 @@ export default function InicioPage() {
       setRegistrados(
         (carros ?? []).map((c) => ({
           id: `carro-${c.id_carro}`,
+          idCarro: c.id_carro,
           placas: c.placa,
           codigoColor: codigoDeNombre(c.color),
           etapa: etapaDeDiagnosticos(c.diagnostico ?? []),
+          eliminable: idsEliminables.has(c.id_carro),
         }))
       );
       setCargado(true);
@@ -251,8 +280,94 @@ export default function InicioPage() {
     setAgregando(false);
   }
 
+  // Borra en la base. Si falla (por ejemplo, el mecánico empezó el diagnóstico mientras tanto), el auto vuelve.
+  async function borrarEnLaBase(auto: AutoRegistrado) {
+    try {
+      const { error } = await crearClienteNavegador().rpc("eliminar_carro", { p_id_carro: auto.idCarro });
+      if (error) {
+        console.error("[TallerToGo] eliminar_carro:", error);
+        setAviso({
+          tipo: "error",
+          texto:
+            error.hint === "con_diagnostico"
+              ? `No se pudo eliminar ${auto.placas}: el mecánico ya empezó su diagnóstico.`
+              : `No se pudo eliminar ${auto.placas}. Intenta de nuevo.`,
+        });
+      } else {
+        mostrarMensajeBarra(`Eliminamos el auto ${auto.placas}.`);
+      }
+    } catch (fallo) {
+      setAviso({ tipo: "error", texto: mensajeDeFallo(fallo) });
+    } finally {
+      await cargar();
+    }
+  }
+
+  function mostrarMensajeBarra(texto: string) {
+    setMensajeBarra(texto);
+    setTimeout(() => setMensajeBarra((actual) => (actual === texto ? null : actual)), 3000);
+  }
+
+  function pedirEliminar(auto: AutoRegistrado) {
+    // Si ya había otro auto esperando, ese se elimina de una vez (como en Gmail)
+    if (temporizador.current) clearTimeout(temporizador.current);
+    if (pendienteRef.current) void borrarEnLaBase(pendienteRef.current);
+
+    setAviso(null);
+    setMensajeBarra(null);
+    pendienteRef.current = auto;
+    setPendiente({ auto });
+    setRestanteMs(SEGUNDOS_DESHACER * 1000);
+    temporizador.current = setTimeout(() => {
+      temporizador.current = null;
+      pendienteRef.current = null;
+      setPendiente(null);
+      void borrarEnLaBase(auto);
+    }, SEGUNDOS_DESHACER * 1000);
+  }
+
+  function deshacer() {
+    if (temporizador.current) clearTimeout(temporizador.current);
+    temporizador.current = null;
+    const auto = pendienteRef.current;
+    pendienteRef.current = null;
+    setPendiente(null);
+    if (auto) mostrarMensajeBarra(`Listo, ${auto.placas} sigue registrado.`);
+  }
+
+  // Cuenta regresiva de la barra de "Deshacer"
+  useEffect(() => {
+    if (!pendiente) return;
+    const id = setInterval(() => setRestanteMs((ms) => Math.max(0, ms - 100)), 100);
+    return () => clearInterval(id);
+  }, [pendiente]);
+
+  // Si el cliente cierra o recarga la pestaña con una eliminación pendiente, el navegador le pregunta antes.
+  useEffect(() => {
+    if (!pendiente) return;
+    const avisar = (evento: BeforeUnloadEvent) => evento.preventDefault();
+    window.addEventListener("beforeunload", avisar);
+    return () => window.removeEventListener("beforeunload", avisar);
+  }, [pendiente]);
+
+  // Si sale de la pantalla dentro de la app con una eliminación pendiente, se aplica en ese momento.
+  useEffect(() => {
+    return () => {
+      if (temporizador.current) clearTimeout(temporizador.current);
+      const auto = pendienteRef.current;
+      if (auto) void crearClienteNavegador().rpc("eliminar_carro", { p_id_carro: auto.idCarro });
+    };
+  }, []);
+
   async function salir() {
     try {
+      if (pendienteRef.current) {
+        if (temporizador.current) clearTimeout(temporizador.current);
+        temporizador.current = null;
+        const auto = pendienteRef.current;
+        pendienteRef.current = null;
+        await crearClienteNavegador().rpc("eliminar_carro", { p_id_carro: auto.idCarro });
+      }
       await crearClienteNavegador().auth.signOut();
     } finally {
       router.push("/login");
@@ -260,8 +375,10 @@ export default function InicioPage() {
   }
 
   // Seguimiento: primero los autos guardados y después los que se están capturando.
+  // El auto que espera ser eliminado ya no se muestra (vuelve si el cliente pulsa "Deshacer").
+  const registradosVisibles = registrados.filter((r) => r.id !== pendiente?.auto.id);
   const autosSeguimiento: AutoSeguimiento[] = [
-    ...registrados.map((r) => ({
+    ...registradosVisibles.map((r) => ({
       id: r.id,
       etiqueta: r.placas,
       hex: buscarColor(r.codigoColor)?.hex,
@@ -317,7 +434,7 @@ export default function InicioPage() {
             Por ahora el taller atiende solo este modelo.
             {registrados.length > 0 &&
               (disponibles > 0
-                ? ` Tienes ${registrados.length} ${registrados.length === 1 ? "auto registrado" : "autos registrados"}.`
+                ? ` Tienes ${registradosVisibles.length} ${registradosVisibles.length === 1 ? "auto registrado" : "autos registrados"}.`
                 : ` Ya registraste el máximo de ${MAX_AUTOS} autos.`)}
           </p>
 
@@ -514,37 +631,91 @@ export default function InicioPage() {
                 {autosSeguimiento.map((a) => {
                   const activo = a.id === seleccionActual;
                   const nombreColor = nombreColorDe(a.id);
+                  const registrado = registrados.find((r) => r.id === a.id);
                   return (
-                    <li key={a.id}>
-                      <button
-                        type="button"
-                        onClick={() => setSeleccionado(a.id)}
-                        aria-pressed={activo}
-                        className={`flex w-full cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-left ${
-                          activo ? "border-tinta" : "border-borde hover:border-suave"
-                        }`}
-                      >
-                        <Muestra hex={a.hex} tamano={14} />
-                        <span className="flex-1">
-                          <span className="block text-[15px] font-semibold">{a.etiqueta}</span>
-                          <span className="text-[13px] text-suave">{nombreColor}</span>
-                        </span>
-                        <span className="rounded-full border border-borde bg-fondo px-2.5 py-0.5 text-xs font-semibold">
-                          {TEXTO_ETAPA[a.etapa]}
-                        </span>
-                      </button>
+                    <li
+                      key={a.id}
+                      className={`rounded-lg border ${activo ? "border-tinta" : "border-borde hover:border-suave"}`}
+                    >
+                      <div className="flex items-center gap-2 pr-2">
+                        <button
+                          type="button"
+                          onClick={() => setSeleccionado(a.id)}
+                          aria-pressed={activo}
+                          className="flex flex-1 cursor-pointer items-center gap-3 px-3 py-2.5 text-left"
+                        >
+                          <Muestra hex={a.hex} tamano={14} />
+                          <span className="flex-1">
+                            <span className="block text-[15px] font-semibold">{a.etiqueta}</span>
+                            <span className="text-[13px] text-suave">{nombreColor}</span>
+                          </span>
+                          <span className="rounded-full border border-borde bg-fondo px-2.5 py-0.5 text-xs font-semibold">
+                            {TEXTO_ETAPA[a.etapa]}
+                          </span>
+                        </button>
+                        {registrado?.eliminable && (
+                          <button
+                            type="button"
+                            onClick={() => pedirEliminar(registrado)}
+                            aria-label={`Eliminar el auto ${a.etiqueta}`}
+                            className="cursor-pointer rounded-md px-2 py-1.5 text-[13px] font-semibold text-suave hover:text-error"
+                          >
+                            Eliminar
+                          </button>
+                        )}
+                      </div>
                     </li>
                   );
                 })}
               </ul>
 
               <p className="mt-4 border-t border-borde pt-3.5 text-sm text-suave">
-                Cada auto tiene su propio diagnóstico, recibo y seguimiento. Elige uno para ver su avance arriba.
+                Cada auto tiene su propio diagnóstico, recibo y seguimiento. Elige uno para ver su avance arriba. Puedes
+                eliminar un auto mientras el mecánico no empiece su diagnóstico; tendrás unos segundos para deshacerlo.
               </p>
             </div>
           </div>
         </section>
       </main>
+
+      {/* Barra de "Deshacer" (como Gmail): abajo a la izquierda */}
+      {(pendiente || mensajeBarra) && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 left-6 z-50 w-[380px] overflow-hidden rounded-lg bg-tinta text-[15px] text-white shadow-[0_8px_24px_rgba(17,18,20,0.25)]"
+        >
+          <div className="flex items-center gap-4 px-4 py-3">
+            <p className="flex-1">
+              {pendiente ? (
+                <>
+                  Eliminaste <span className="font-semibold">{pendiente.auto.placas}</span>
+                  <span className="text-white/60"> · {Math.ceil(restanteMs / 1000)} s</span>
+                </>
+              ) : (
+                mensajeBarra
+              )}
+            </p>
+            {pendiente && (
+              <button
+                type="button"
+                onClick={deshacer}
+                className="cursor-pointer rounded-md px-2 py-1 font-titulo text-[17px] font-semibold text-acento hover:bg-white/10"
+              >
+                Deshacer
+              </button>
+            )}
+          </div>
+          {pendiente && (
+            <div className="h-1 bg-white/15" aria-hidden="true">
+              <div
+                className="h-full bg-acento transition-[width] duration-100 ease-linear"
+                style={{ width: `${(restanteMs / (SEGUNDOS_DESHACER * 1000)) * 100}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
