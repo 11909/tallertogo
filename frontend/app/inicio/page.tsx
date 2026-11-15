@@ -9,14 +9,17 @@
 //   que se acaba el tiempo, así el cliente puede arrepentirse.
 // - Cada auto tiene su propio diagnóstico, recibo y seguimiento.
 // Lee el usuario y sus autos de Supabase (tablas perfil, carro y diagnostico) y guarda los autos nuevos.
-// El seguimiento se actualiza en vivo cuando el mecánico cambia un diagnóstico (Supabase Realtime).
+// La lista se actualiza en vivo cuando el mecánico cambia un diagnóstico (Supabase Realtime).
+// El seguimiento en vivo de cada auto ahora se ve en su diagnóstico (/autos/[id]).
+// Con al menos un auto registrado, "Terminar registro" lleva a Mis autos (/autos).
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Aviso, { mensajeDeFallo, type DatosAviso } from "@/components/Aviso";
 import BarraSuperior from "@/components/BarraSuperior";
 import BuscadorOpciones, { type Opcion } from "@/components/BuscadorOpciones";
-import SeguimientoEnVivo, { Muestra, type AutoSeguimiento, type Etapa } from "@/components/SeguimientoEnVivo";
+import { Muestra, type AutoSeguimiento, type Etapa } from "@/components/SeguimientoEnVivo";
 import { COLORES_Z06_2025, buscarColor } from "@/lib/colores";
 import { crearClienteNavegador } from "@/lib/supabase/cliente";
 
@@ -69,7 +72,6 @@ export default function InicioPage() {
   const [registrados, setRegistrados] = useState<AutoRegistrado[]>([]);
   const [autos, setAutos] = useState<AutoForm[]>([{ id: "auto-0", placas: "", color: "" }]);
   const [errores, setErrores] = useState<Record<string, ErroresAuto>>({});
-  const [seleccionado, setSeleccionado] = useState<string>("auto-0");
   const [aviso, setAviso] = useState<DatosAviso | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [cargado, setCargado] = useState(false); // ya se leyeron los autos de la base
@@ -391,9 +393,6 @@ export default function InicioPage() {
       etapa: "registro" as const,
     })),
   ];
-  const seleccionActual = autosSeguimiento.some((a) => a.id === seleccionado)
-    ? seleccionado
-    : (autosSeguimiento[0]?.id ?? "");
   const nombreColorDe = (id: string) => {
     const registrado = registrados.find((r) => r.id === id);
     const codigo = registrado ? registrado.codigoColor : formulario.find((a) => a.id === id)?.color;
@@ -419,10 +418,6 @@ export default function InicioPage() {
           </div>
         }
       />
-
-      {autosSeguimiento.length > 0 && (
-        <SeguimientoEnVivo autos={autosSeguimiento} seleccionado={seleccionActual} onSeleccionar={setSeleccionado} />
-      )}
 
       <main className="grid flex-1 grid-cols-[520px_1fr]">
         {/* Panel izquierdo: registro de autos */}
@@ -603,6 +598,27 @@ export default function InicioPage() {
           )}
 
           {aviso && <Aviso {...aviso} className="mt-4" />}
+
+          {/* Con al menos un auto registrado ya puede terminar el registro e ir a Mis autos.
+              Es el botón de acento solo cuando el formulario está cerrado (un solo acento por pantalla). */}
+          {cargado && registradosVisibles.length > 0 && (
+            <div className="mt-6 border-t border-borde pt-5">
+              <Link
+                href="/autos"
+                className={`flex w-full items-center justify-center gap-2 rounded-lg font-titulo text-[17px] font-semibold tracking-wide text-tinta transition ${
+                  mostrarFormulario
+                    ? "h-11 border border-borde bg-tarjeta hover:border-tinta"
+                    : "h-12 bg-acento hover:brightness-95 active:scale-[0.99]"
+                }`}
+              >
+                Terminar registro
+                <span aria-hidden="true">→</span>
+              </Link>
+              <p className="mt-2 text-center text-[13px] text-suave">
+                Podrás ver el diagnóstico y el avance de cada auto en Mis autos.
+              </p>
+            </div>
+          )}
         </form>
 
         {/* Derecha: tarjeta de los autos */}
@@ -629,21 +645,12 @@ export default function InicioPage() {
 
               <ul className="mt-3.5 flex flex-col gap-2">
                 {autosSeguimiento.map((a) => {
-                  const activo = a.id === seleccionActual;
                   const nombreColor = nombreColorDe(a.id);
                   const registrado = registrados.find((r) => r.id === a.id);
                   return (
-                    <li
-                      key={a.id}
-                      className={`rounded-lg border ${activo ? "border-tinta" : "border-borde hover:border-suave"}`}
-                    >
+                    <li key={a.id} className="rounded-lg border border-borde">
                       <div className="flex items-center gap-2 pr-2">
-                        <button
-                          type="button"
-                          onClick={() => setSeleccionado(a.id)}
-                          aria-pressed={activo}
-                          className="flex flex-1 cursor-pointer items-center gap-3 px-3 py-2.5 text-left"
-                        >
+                        <div className="flex flex-1 items-center gap-3 px-3 py-2.5 text-left">
                           <Muestra hex={a.hex} tamano={14} />
                           <span className="flex-1">
                             <span className="block text-[15px] font-semibold">{a.etiqueta}</span>
@@ -652,7 +659,7 @@ export default function InicioPage() {
                           <span className="rounded-full border border-borde bg-fondo px-2.5 py-0.5 text-xs font-semibold">
                             {TEXTO_ETAPA[a.etapa]}
                           </span>
-                        </button>
+                        </div>
                         {registrado?.eliminable && (
                           <button
                             type="button"
@@ -670,8 +677,8 @@ export default function InicioPage() {
               </ul>
 
               <p className="mt-4 border-t border-borde pt-3.5 text-sm text-suave">
-                Cada auto tiene su propio diagnóstico, recibo y seguimiento. Elige uno para ver su avance arriba. Puedes
-                eliminar un auto mientras el mecánico no empiece su diagnóstico; tendrás unos segundos para deshacerlo.
+                Cada auto tiene su propio diagnóstico, recibo y seguimiento en vivo. Puedes eliminar un auto mientras el
+                mecánico no empiece su diagnóstico; tendrás unos segundos para deshacerlo.
               </p>
             </div>
           </div>

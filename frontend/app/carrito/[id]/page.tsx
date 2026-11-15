@@ -1,11 +1,7 @@
-// Ruta /carrito/[id]: carrito del cliente para un auto (el id se lee en el navegador, por eso va en <Suspense>)
-import { Suspense } from "react";
-import Carrito from "./Carrito";
+// Ruta anterior /carrito/[id] (un carrito por auto). Ahora el carrito es uno solo, agrupado por auto: /carrito.
+// Carrito.tsx de esta carpeta ya no se usa; se puede borrar junto con esta carpeta.
+import { redirect } from "next/navigation";
 
 export default function Page() {
-  return (
-    <Suspense fallback={<p className="p-12 text-sm text-suave">Cargando carrito…</p>}>
-      <Carrito />
-    </Suspense>
-  );
+  redirect("/carrito");
 }
