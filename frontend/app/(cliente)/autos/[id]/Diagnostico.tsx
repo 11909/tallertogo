@@ -266,20 +266,8 @@ export default function Diagnostico() {
           </ul>
 
           {/* Acciones */}
-          <div className="mt-8 flex items-center justify-between gap-6 rounded-xl border border-borde bg-tarjeta px-6 py-4">
-            {comprable ? (
-              <button
-                type="button"
-                disabled={guardando}
-                onClick={() => (cerrado ? void cambiar(false) : omitidas.length > 0 ? setConfirmarCierre(true) : void cambiar(true))}
-                className={BOTON_BORDE}
-              >
-                {cerrado ? "Reabrir diagnóstico" : "Cerrar diagnóstico"}
-              </button>
-            ) : (
-              <span />
-            )}
-            <div className="flex items-center gap-5">
+          <div className="mt-8 flex items-center justify-end gap-6 rounded-xl border border-borde bg-tarjeta px-6 py-4">
+            <div className="flex items-center gap-3">
               <p className="text-right text-sm text-suave">
                 {itemsAuto.length === 0 ? (
                   "No hay piezas de este auto en tu carrito"
@@ -290,6 +278,16 @@ export default function Diagnostico() {
                   </>
                 )}
               </p>
+              {comprable && (
+                <button
+                  type="button"
+                  disabled={guardando}
+                  onClick={() => (cerrado ? void cambiar(false) : omitidas.length > 0 ? setConfirmarCierre(true) : void cambiar(true))}
+                  className={BOTON_BORDE}
+                >
+                  {cerrado ? "Reabrir diagnóstico" : "Cerrar diagnóstico"}
+                </button>
+              )}
               <Link href="/carrito" className={BOTON_ACENTO}>
                 Ir al carrito
                 <Icono nombre="flecha" tamano={18} />

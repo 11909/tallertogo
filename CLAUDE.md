@@ -22,6 +22,7 @@ Responde siempre en español.
     - `pagos/`: pedidos pendientes y pagados, con todos sus QR (también los vencidos) y el ticket.
     - `perfil/page.tsx`: Mi perfil del cliente (se abre desde su nombre en la barra superior); para guardar necesita el **paso 8** de `docs/base-de-datos.md`.
   - `lib/cliente/`: capa de datos del cliente. `tipos.ts` (forma de la base), `formato.ts`, `fuenteSupabase.ts` (consultas reales) y `fuente.ts`, que elige la fuente: con `NEXT_PUBLIC_DATOS_CLIENTE=supabase` en `.env.local` usa Supabase (requiere el **paso 9** de `docs/base-de-datos.md`); si no, usa la demo en memoria de `lib/clienteDemo.ts`.
+  - Pagos CoDi: `/api/pey/qr` genera y guarda el QR desde el servidor; `/api/pey/webhook` verifica la firma de pey y registra el pago. `CodigoQR.tsx` dibuja el `qr_string` real.
   - `app/carrito/[id]/`: ruta vieja (un carrito por auto); redirige a `/carrito`. `Carrito.tsx` ya no se usa y se puede borrar.
   - `app/taller/page.tsx` (pantalla 4, autos por atender del mecánico): lee autos, diagnósticos y pagos de Supabase, actualiza las etapas de reparación y se suscribe a cambios en vivo.
   - `app/taller/diagnostico/[id]/` (pantallas 5 y 6): carga el catálogo, crea o reanuda el borrador, guarda sus fallas y descripción, lo envía y muestra el diagnóstico y pagos registrados en Supabase.
@@ -31,7 +32,7 @@ Responde siempre en español.
   - `lib/supabase/`: clientes de Supabase (`cliente.ts` navegador, `servidor.ts` servidor con sesión, `admin.ts` solo servidor con la llave secreta).
   - `components/SeguimientoEnVivo.tsx`: franja de seguimiento por auto (pastillas con las placas); después se conectará a Supabase Realtime.
   - `AGENTS.md`: Next.js 16 trae cambios; antes de escribir código hay que leer las guías en `node_modules/next/dist/docs/`.
-- **Faltan:** correr el paso 9 en Supabase para activar los datos reales del cliente y conectar pey (pedir el QR y el webhook).
+- **Faltan:** correr el paso 9 en Supabase para activar los datos reales del cliente y configurar en pey la API key y el webhook `codi.qr.payment_received`. Las variables necesarias están listadas, sin valores, en `frontend/.env.example`; la URL pública del webhook es `/api/pey/webhook`. La API no tiene sandbox: no generar QR ni realizar pagos sin autorización explícita.
 - Algunos `TODO` del código nombran tablas en inglés (`profiles`, `vehicles`, `customer_id`). En la base se llaman `perfil`, `carro` e `id_cliente`: usa siempre los nombres de `docs/base-de-datos.md`.
 
 ## 1. Qué es

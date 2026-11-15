@@ -55,6 +55,7 @@ type Valor = {
   incluir: (falla: Falla) => void;
   confirmarCarrito: () => Promise<{ ids: number[]; errores: string[] }>;
   generarNuevoQR: (idOrden: number) => Promise<number>;
+  generarQR?: (idOrden: number) => Promise<void>;
   cambiarCierre: (auto: AutoCliente, cerrado: boolean) => Promise<void>;
   simularPago?: (idOrden: number) => Promise<void>;
   salir: () => void;
@@ -217,9 +218,23 @@ export default function EstadoCliente({ children }: { children: ReactNode }) {
 
   const generarNuevoQR = useCallback(
     async (idOrden: number) => {
-      const id = await fuente.regenerarQR(idOrden);
+      try {
+        const id = await fuente.regenerarQR(idOrden);
+        await recargar();
+        return id;
+      } catch (fallo) {
+        await recargar();
+        throw fallo;
+      }
+    },
+    [recargar]
+  );
+
+  const generarQR = useCallback(
+    async (idOrden: number) => {
+      if (!fuente.generarQR) throw new Error("La generación de QR no está disponible en esta fuente de datos.");
+      await fuente.generarQR(idOrden);
       await recargar();
-      return id;
     },
     [recargar]
   );
@@ -310,6 +325,7 @@ export default function EstadoCliente({ children }: { children: ReactNode }) {
       incluir,
       confirmarCarrito,
       generarNuevoQR,
+      generarQR: fuente.generarQR ? generarQR : undefined,
       cambiarCierre,
       simularPago,
       salir,
@@ -332,6 +348,7 @@ export default function EstadoCliente({ children }: { children: ReactNode }) {
       incluir,
       confirmarCarrito,
       generarNuevoQR,
+      generarQR,
       cambiarCierre,
       simularPago,
       salir,

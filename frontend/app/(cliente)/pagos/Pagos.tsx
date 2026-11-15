@@ -263,7 +263,7 @@ function ModalQR({
   onCambiar: (id: number) => void;
 }) {
   const router = useRouter();
-  const { estadoOrden, ahora, generarNuevoQR, simularPago } = useCliente();
+  const { estadoOrden, ahora, generarNuevoQR, generarQR, simularPago } = useCliente();
   const [trabajando, setTrabajando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const estado = estadoOrden(orden);
@@ -275,6 +275,19 @@ function ModalQR({
     setError(null);
     try {
       onCambiar(await generarNuevoQR(orden.idOrden));
+    } catch (fallo) {
+      setError(fallo instanceof Error ? `No se pudo generar el QR: ${fallo.message}` : "No se pudo generar el QR. Intenta de nuevo.");
+    } finally {
+      setTrabajando(false);
+    }
+  }
+
+  async function reintentarQR() {
+    if (!generarQR) return;
+    setTrabajando(true);
+    setError(null);
+    try {
+      await generarQR(orden.idOrden);
     } catch (fallo) {
       setError(fallo instanceof Error ? `No se pudo generar el QR: ${fallo.message}` : "No se pudo generar el QR. Intenta de nuevo.");
     } finally {
@@ -307,7 +320,7 @@ function ModalQR({
   return (
     <Modal etiqueta="Pago con CoDi" titulo={vencida ? (estado === "rechazado" ? "El pago de este QR se rechazó" : "Este QR venció") : "Escanea para pagar"} onCerrar={onCerrar}>
       <div className="relative flex justify-center rounded-lg border border-borde bg-tarjeta py-5">
-        <CodigoQR semilla={orden.idOrden} qrString={orden.qrString} apagado={vencida} />
+        <CodigoQR qrString={orden.qrString} apagado={vencida} />
         {vencida && (
           <span className="absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full border border-error/30 bg-tarjeta px-3 py-1 text-sm font-semibold text-error">
             <Icono nombre="reloj" tamano={15} />
@@ -363,19 +376,32 @@ function ModalQR({
         </>
       ) : (
         <>
-          <div className="mt-5 flex items-center justify-between rounded-lg bg-fondo px-4 py-3">
-            <span className="flex items-center gap-2.5 text-sm">
-              <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-acento" aria-hidden="true" />
-              Esperando confirmación del pago…
-            </span>
-            <span className="flex items-center gap-1.5 text-sm text-suave">
-              <Icono nombre="reloj" tamano={15} />
-              <span className="font-mono text-tinta">{restante(orden.expiraEn, ahora)}</span>
-            </span>
-          </div>
-          <p className="mt-3 text-[13px] text-suave">
-            Abre la app de tu banco, entra a CoDi y escanea el código. Esta pantalla se actualiza sola cuando llegue el pago.
-          </p>
+          {orden.qrString ? (
+            <>
+              <div className="mt-5 flex items-center justify-between rounded-lg bg-fondo px-4 py-3">
+                <span className="flex items-center gap-2.5 text-sm">
+                  <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-acento" aria-hidden="true" />
+                  Esperando confirmación del pago…
+                </span>
+                <span className="flex items-center gap-1.5 text-sm text-suave">
+                  <Icono nombre="reloj" tamano={15} />
+                  <span className="font-mono text-tinta">{restante(orden.expiraEn, ahora)}</span>
+                </span>
+              </div>
+              <p className="mt-3 text-[13px] text-suave">
+                Abre la app de tu banco, entra a CoDi y escanea el código. Esta pantalla se actualiza sola cuando llegue el pago.
+              </p>
+            </>
+          ) : (
+            <div className="mt-4">
+              <Aviso tipo="error" texto={error ?? "No se pudo generar el QR de esta orden. Intenta generarlo de nuevo."} />
+              {generarQR && (
+                <button type="button" onClick={() => void reintentarQR()} disabled={trabajando} className={`${BOTON_BORDE} mt-3 w-full`}>
+                  {trabajando ? "Generando…" : "Reintentar generación del QR"}
+                </button>
+              )}
+            </div>
+          )}
           {simularPago && (
             // Solo en la demo: en producción el webhook de pey confirma el pago
             <button

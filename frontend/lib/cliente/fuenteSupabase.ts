@@ -1,9 +1,6 @@
 // Fuente de datos SUPABASE para las pantallas del cliente.
 // Necesita el SQL del paso 9 de docs/base-de-datos.md (cerrar diagnóstico, historial de QR y v_orden_cliente).
 // Se activa con NEXT_PUBLIC_DATOS_CLIENTE=supabase en frontend/.env.local.
-// TODO (pey): después de crear_orden / regenerar_qr, pedir el QR a pey desde el servidor
-// (POST https://api.pey.mx/codi/qr con amount, numRef = id_orden, expiration = 600, generateImage = true)
-// y guardar codi_qr_id y qr_string con el cliente admin. Mientras no exista, la orden queda sin qr_string.
 import type {
   AutoCliente,
   DatosCliente,
@@ -76,6 +73,16 @@ function fallo(error: { message: string } | null, contexto: string) {
   if (!error) return;
   console.error(`[TallerToGo] ${contexto}:`, error);
   throw new Error(error.message);
+}
+
+async function pedirQR(idOrden: number) {
+  const respuesta = await fetch("/api/pey/qr", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ idOrden }),
+  });
+  const datos: { error?: string } = await respuesta.json();
+  if (!respuesta.ok) throw new Error(datos.error ?? "No se pudo generar el QR.");
 }
 
 export const fuenteSupabase: FuenteCliente = {
@@ -224,15 +231,21 @@ export const fuenteSupabase: FuenteCliente = {
       p_lineas: lineas.map((l) => ({ id_falla: l.idFalla, id_marca: l.idMarca })),
     });
     fallo(error, "crear_orden");
-    // TODO (pey): pedir el QR de esta orden en el servidor.
-    return data as number;
+    const idOrden = data as number;
+    await pedirQR(idOrden);
+    return idOrden;
   },
 
   async regenerarQR(idOrden: number) {
     const { data, error } = await crearClienteNavegador().rpc("regenerar_qr", { p_id_orden: idOrden });
     fallo(error, "regenerar_qr");
-    // TODO (pey): pedir el QR de la orden nueva en el servidor.
-    return data as number;
+    const nuevoId = data as number;
+    await pedirQR(nuevoId);
+    return nuevoId;
+  },
+
+  async generarQR(idOrden: number) {
+    await pedirQR(idOrden);
   },
 
   async cambiarCierre(folio: number, cerrado: boolean) {

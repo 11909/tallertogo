@@ -460,16 +460,19 @@ const { data: filas } = await supabase.from('v_diagnostico_cliente')
 **Pagar**
 
 ```js
-// 1) Con la sesión del cliente (crear_orden usa auth.uid())
+// 1) Con la sesión del cliente (crear_orden usa auth.uid() y calcula el importe)
 const { data: id_orden, error } = await supabase.rpc('crear_orden', {
   p_folio: folio,
   p_lineas: seleccion.map(s => ({ id_falla: s.id_falla, id_marca: s.id_marca })),
 });
-// 2) En el servidor: leer orden.monto_centavos, llamar a pey POST /codi/qr
-//    (amount = monto_centavos / 100, numRef = String(id_orden), expiration = 600, generateImage = true)
-//    y guardar la respuesta con el cliente *service role*:
-await supabaseAdmin.from('orden')
-  .update({ codi_qr_id: qr.id, qr_string: qr.qrString }).eq('id_orden', id_orden);
+// 2) El cliente solicita el QR al Route Handler autenticado.
+//    El servidor valida propiedad/estado, lee monto_centavos desde la BD,
+//    llama a pey POST /codi/qr y guarda codi_qr_id y qr_string con service role.
+await fetch('/api/pey/qr', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ idOrden: id_orden }),
+});
 ```
 
 **Pantalla del QR (espera el pago)**
@@ -512,7 +515,8 @@ supabase.channel(`diag-${folio}`)
 ### Servidor: webhook de pey
 
 ```js
-// Después de verificar la firma (Standard Webhooks, cuerpo crudo), con service role:
+// POST /api/pey/webhook: verifica la firma Standard Webhooks con el cuerpo crudo
+// y, con service role, llama a:
 const { data: resultado } = await supabaseAdmin.rpc('registrar_pago', {
   p_codi_qr_id: body.codiQrId,
   p_transaction_id: body.transactionId,
@@ -522,7 +526,9 @@ const { data: resultado } = await supabaseAdmin.rpc('registrar_pago', {
 // 'pagado' | 'repetido' | 'rechazado' | 'desconocido'
 ```
 
-La service role key va solo en variables de entorno del servidor, nunca en el navegador ni en el repo.
+La implementación está en `frontend/app/api/pey/qr/route.ts` y `frontend/app/api/pey/webhook/route.ts`. Configura `PEY_API_KEY`, `PEY_WEBHOOK_SECRET` y `SUPABASE_SECRET_KEY` (o `SUPABASE_SERVICE_ROLE_KEY`) como variables de entorno solo del servidor; `frontend/.env.example` enumera los nombres, sin valores. En el portal de pey configura el webhook `codi.qr.payment_received` para la URL pública `https://<dominio>/api/pey/webhook`. La service role key y los secretos nunca van en el navegador ni en el repo.
+
+La API de pey no tiene sandbox: crear un QR solicita una operación real. No se generaron QR durante la validación del código; antes de probar, verifica la cuenta CoDi y acepta que los pagos de prueba no se devuelven.
 
 ## 8. Normalización (resumen)
 

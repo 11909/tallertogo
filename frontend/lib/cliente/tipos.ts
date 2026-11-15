@@ -81,6 +81,7 @@ export interface FuenteCliente {
   cargar(): Promise<DatosCliente | "sin_sesion">;
   crearOrden(folio: number, lineas: LineaCompra[]): Promise<number>; // RPC crear_orden → id_orden
   regenerarQR(idOrden: number): Promise<number>; // RPC regenerar_qr → id_orden nuevo (mismo pedido)
+  generarQR?(idOrden: number): Promise<void>; // solicita o recupera el QR de una orden pendiente
   cambiarCierre(folio: number, cerrado: boolean): Promise<void>; // RPC cambiar_cierre_diagnostico
   escuchar(alCambiar: () => void): () => void; // Supabase Realtime (diagnostico y orden)
   salir(): Promise<void>;
