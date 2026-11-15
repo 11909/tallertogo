@@ -1,15 +1,17 @@
 "use client";
 
 // Pantalla 4: Autos por atender (mecánico, diseñada para computadora)
-// Por ahora usa datos de ejemplo. Falta leer los autos de Supabase y guardar los cambios de etapa.
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import BarraSuperior from "@/components/BarraSuperior";
 import MenuMecanico from "@/components/MenuMecanico";
+import Aviso, { mensajeDeFallo, type DatosAviso } from "@/components/Aviso";
 import { Muestra } from "@/components/SeguimientoEnVivo";
-import { buscarColor } from "@/lib/colores";
-import { AUTOS_DEMO, ETAPAS_TALLER, hora, normalizar, ordenarPorTurno, turnoDe, type AutoTaller, type EtapaTaller } from "@/lib/autosTaller";
+import { buscarColor, COLORES_Z06_2025 } from "@/lib/colores";
+import { ETAPAS_TALLER, hora, normalizar, ordenarPorTurno, turnoDe, type AutoTaller, type EtapaTaller } from "@/lib/autosTaller";
+import { crearClienteNavegador } from "@/lib/supabase/cliente";
 
 type Filtro = "todos" | "por_diagnosticar" | "esperando_pago" | "en_reparacion" | "listo" | "entregado";
 
@@ -40,11 +42,148 @@ const fechaHoy = () =>
     .replace(/^./, (c) => c.toUpperCase());
 const sinSuscripcion = () => () => {};
 
+type EstadoDiagnostico = "borrador" | "enviado" | "pagado" | "en_reparacion" | "listo" | "entregado";
+type DiagnosticoFila = {
+  folio: number;
+  estado: EstadoDiagnostico;
+  fecha_creacion: string;
+  fecha_envio: string | null;
+  fecha_reparacion: string | null;
+  fecha_listo: string | null;
+  fecha_entrega: string | null;
+  orden: { estado: string; fecha_pago: string | null }[] | null;
+};
+type CarroFila = {
+  id_carro: number;
+  placa: string;
+  color: string;
+  fecha_registro: string;
+  diagnostico: DiagnosticoFila[] | null;
+};
+
+function etapaDe(diagnostico?: DiagnosticoFila): EtapaTaller {
+  if (!diagnostico || diagnostico.estado === "borrador") return "por_diagnosticar";
+  return diagnostico.estado === "enviado" ? "esperando_pago" : diagnostico.estado;
+}
+
+function fechaDeActualizacion(diagnostico: DiagnosticoFila | undefined, etapa: EtapaTaller) {
+  if (!diagnostico) return "";
+  const fechas: Partial<Record<EtapaTaller, [string, string | null]>> = {
+    esperando_pago: ["Enviado", diagnostico.fecha_envio],
+    pagado: ["Pagó", diagnostico.orden?.find((orden) => orden.estado === "pagado")?.fecha_pago ?? null],
+    en_reparacion: ["En reparación desde", diagnostico.fecha_reparacion],
+    listo: ["Listo desde", diagnostico.fecha_listo],
+    entregado: ["Entregado", diagnostico.fecha_entrega],
+  };
+  const detalle = fechas[etapa];
+  return detalle?.[1] ? `${detalle[0]} ${hora(detalle[1])}` : "";
+}
+
+function folioVisible(folio: number) {
+  return `DG-${String(folio).padStart(5, "0")}`;
+}
+
 export default function TallerPage() {
-  const [autos, setAutos] = useState<AutoTaller[]>(AUTOS_DEMO);
+  const [autos, setAutos] = useState<AutoTaller[]>([]);
   const [filtro, setFiltro] = useState<Filtro>("todos");
   const [busqueda, setBusqueda] = useState("");
+  const [cargando, setCargando] = useState(true);
+  const [revision, setRevision] = useState(0);
+  const [aviso, setAviso] = useState<DatosAviso | null>(null);
+  const [avanzandoId, setAvanzandoId] = useState<string | null>(null);
+  const [sesionLista, setSesionLista] = useState(false);
+  const router = useRouter();
   const hoy = useSyncExternalStore(sinSuscripcion, fechaHoy, () => "");
+
+  useEffect(() => {
+    let vigente = true;
+    let canal: ReturnType<ReturnType<typeof crearClienteNavegador>["channel"]> | null = null;
+    let supabaseCliente: ReturnType<typeof crearClienteNavegador> | null = null;
+
+    async function cargar() {
+      setCargando(true);
+      setAviso(null);
+      try {
+        const supabase = crearClienteNavegador();
+        supabaseCliente = supabase;
+        const { data: sesion, error: errorSesion } = await supabase.auth.getUser();
+        if (errorSesion) throw errorSesion;
+        if (!sesion.user) {
+          router.replace("/login");
+          return;
+        }
+
+        const { data: perfil, error: errorPerfil } = await supabase
+          .from("perfil")
+          .select("rol")
+          .eq("id_perfil", sesion.user.id)
+          .maybeSingle();
+        if (errorPerfil) throw errorPerfil;
+        if (perfil?.rol !== "mecanico") {
+          router.replace(perfil?.rol === "cliente" ? "/autos" : "/login");
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from("carro")
+          .select(
+            "id_carro, placa, color, fecha_registro, diagnostico ( folio, estado, fecha_creacion, fecha_envio, fecha_reparacion, fecha_listo, fecha_entrega, orden ( estado, fecha_pago ) )"
+          )
+          .order("fecha_registro", { ascending: true });
+        if (error) throw error;
+
+        const filas: CarroFila[] = data ?? [];
+        const cargados = filas.map((carro) => {
+          const diagnostico = [...(carro.diagnostico ?? [])].sort(
+            (a, b) => Date.parse(b.fecha_creacion) - Date.parse(a.fecha_creacion)
+          )[0];
+          const color = COLORES_Z06_2025.find((item) => item.nombre === carro.color);
+          if (!color) throw new Error(`El color del auto ${carro.placa} no coincide con el catálogo.`);
+          const etapa = etapaDe(diagnostico);
+          const pagos = (diagnostico?.orden ?? [])
+            .filter((orden) => orden.estado === "pagado" && orden.fecha_pago)
+            .map((orden) => orden.fecha_pago!)
+            .sort();
+          return {
+            id: String(carro.id_carro),
+            placas: carro.placa,
+            colorCodigo: color.codigo,
+            folio: diagnostico ? folioVisible(diagnostico.folio) : null,
+            folioNumero: diagnostico?.folio ?? null,
+            etapa,
+            actualizacion: fechaDeActualizacion(diagnostico, etapa),
+            registradoEn: carro.fecha_registro,
+            pagadoEn: pagos[0] ?? null,
+          };
+        });
+        if (vigente) {
+          setAutos(cargados);
+          setSesionLista(true);
+        }
+
+        canal = supabase
+          .channel("taller-autos")
+          .on("postgres_changes", { event: "*", schema: "public", table: "diagnostico" }, () => setRevision((n) => n + 1))
+          .on("postgres_changes", { event: "*", schema: "public", table: "orden" }, () => setRevision((n) => n + 1))
+          .subscribe((estado) => {
+            if (estado === "CHANNEL_ERROR" || estado === "TIMED_OUT") {
+              console.error("[TallerToGo] No se pudo suscribir a las actualizaciones del taller:", estado);
+              if (vigente) setAviso({ tipo: "error", texto: "No se pudo activar la actualización en vivo. Usa «Actualizar» para consultar los cambios." });
+            }
+          });
+      } catch (error) {
+        if (vigente) setAviso({ tipo: "error", texto: `No se pudieron cargar los autos del taller. ${mensajeDeFallo(error)}` });
+      } finally {
+        if (vigente) setCargando(false);
+      }
+    }
+
+    void cargar();
+    return () => {
+      vigente = false;
+      if (canal && supabaseCliente) void supabaseCliente.removeChannel(canal);
+    };
+  }, [revision, router]);
 
   const visibles = useMemo(() => {
     const q = normalizar(busqueda);
@@ -58,14 +197,28 @@ export default function TallerPage() {
   // Se diagnostica por orden de llegada y se repara por orden de pago.
   // El botón amarillo es el turno 1 de diagnóstico; el turno 1 de reparación lleva la etiqueta "Siguiente".
 
-  function avanzar(id: string) {
-    // TODO: guardar el cambio de etapa en Supabase (el cliente lo ve en vivo).
-    setAutos((prev) =>
-      prev.map((a) => {
-        const siguiente = ETAPAS_TALLER[a.etapa].siguiente;
-        return a.id === id && siguiente ? { ...a, etapa: siguiente, actualizacion: "Justo ahora" } : a;
-      })
-    );
+  async function avanzar(auto: AutoTaller) {
+    const siguiente = ETAPAS_TALLER[auto.etapa].siguiente;
+    if (!siguiente || !auto.folioNumero || avanzandoId) return;
+    setAvanzandoId(auto.id);
+    setAviso(null);
+    try {
+      const supabase = crearClienteNavegador();
+      const { data, error } = await supabase
+        .from("diagnostico")
+        .update({ estado: siguiente })
+        .eq("folio", auto.folioNumero)
+        .eq("estado", auto.etapa)
+        .select("folio")
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error("La etapa cambió en otra sesión. Actualiza la lista antes de continuar.");
+      setRevision((n) => n + 1);
+    } catch (error) {
+      setAviso({ tipo: "error", texto: `No se pudo actualizar la etapa. ${mensajeDeFallo(error)}` });
+    } finally {
+      setAvanzandoId(null);
+    }
   }
 
   return (
@@ -81,21 +234,34 @@ export default function TallerPage() {
               {autos.length} autos
             </p>
           </div>
-          <label className="relative w-[300px]">
-            <span className="sr-only">Buscar por placas o folio</span>
-            <svg viewBox="0 0 20 20" className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-suave" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-              <circle cx="9" cy="9" r="6" />
-              <path d="m14 14 4 4" strokeLinecap="round" />
-            </svg>
-            <input
-              type="search"
-              value={busqueda}
-              onChange={(e) => setBusqueda(e.target.value)}
-              placeholder="Buscar por placas o folio"
-              className="h-11 w-full rounded-lg border border-borde bg-tarjeta pr-3 pl-9 text-[15px] outline-none placeholder:text-suave/70 focus:border-tinta"
-            />
-          </label>
+          <div className="flex items-center gap-2">
+            {sesionLista && (
+              <button
+                type="button"
+                onClick={() => setRevision((n) => n + 1)}
+                className="h-11 cursor-pointer rounded-lg border border-borde bg-tarjeta px-3 text-sm font-semibold hover:border-tinta"
+              >
+                Actualizar
+              </button>
+            )}
+            <label className="relative w-[300px]">
+              <span className="sr-only">Buscar por placas o folio</span>
+              <svg viewBox="0 0 20 20" className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-suave" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <circle cx="9" cy="9" r="6" />
+                <path d="m14 14 4 4" strokeLinecap="round" />
+              </svg>
+              <input
+                type="search"
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+                placeholder="Buscar por placas o folio"
+                className="h-11 w-full rounded-lg border border-borde bg-tarjeta pr-3 pl-9 text-[15px] outline-none placeholder:text-suave/70 focus:border-tinta"
+              />
+            </label>
+          </div>
         </div>
+
+        {aviso && <Aviso {...aviso} className="mt-4" />}
 
         {/* Contadores: también funcionan como filtros */}
         <div className="mt-6 grid grid-cols-4 gap-3">
@@ -187,7 +353,7 @@ export default function TallerPage() {
                     <td className="px-4 py-3 whitespace-nowrap">
                       {auto.folio ? (
                         <Link
-                          href={`/taller/diagnostico/${auto.id}/ver`}
+                          href={auto.etapa === "por_diagnosticar" ? `/taller/diagnostico/${auto.id}` : `/taller/diagnostico/${auto.id}/ver`}
                           className="font-mono text-sm underline decoration-borde underline-offset-4 hover:decoration-tinta"
                           title="Ver diagnóstico"
                         >
@@ -214,7 +380,7 @@ export default function TallerPage() {
                         <span className="mr-2 rounded-full border border-tinta px-2 py-0.5 text-xs font-semibold">Siguiente</span>
                       )}
                       {etapa.siguiente ? (
-                        <button type="button" onClick={() => avanzar(auto.id)} className={claseBoton}>
+                        <button type="button" onClick={() => void avanzar(auto)} disabled={avanzandoId === auto.id || cargando} className={claseBoton}>
                           {etapa.accion}
                         </button>
                       ) : (
@@ -230,7 +396,12 @@ export default function TallerPage() {
                   </tr>
                 );
               })}
-              {visibles.length === 0 && (
+              {cargando && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-10 text-center text-sm text-suave">Cargando autos de la base de datos…</td>
+                </tr>
+              )}
+              {!cargando && visibles.length === 0 && (
                 <tr>
                   <td colSpan={6} className="px-4 py-10 text-center text-sm text-suave">
                     No hay autos con ese filtro.{" "}

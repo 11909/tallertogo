@@ -4,7 +4,7 @@ Este archivo da contexto a Claude (y al equipo) en cada sesión. **Es la fuente 
 
 Responde siempre en español.
 
-**Etapa actual:** ya empezó el desarrollo del **frontend**. Las pantallas que existen usan datos de ejemplo y **todavía no están conectadas a Supabase ni a pey** (lo que falta está marcado con `TODO` en el código). No propongas ni generes código salvo que te lo pidan explícitamente. El código de ejemplo que aparece en `docs/contexto-proyecto.md` **se ignora**.
+**Etapa actual:** ya empezó el desarrollo del **frontend**. Las pantallas de acceso, registro y cliente usan Supabase; las pantallas principales del mecánico también consultan y actualizan Supabase. La integración con pey y el paso 9 de `docs/base-de-datos.md` siguen pendientes. No propongas ni generes código salvo que te lo pidan explícitamente. El código de ejemplo que aparece en `docs/contexto-proyecto.md` **se ignora**.
 
 ### Lo que hay en el repo
 
@@ -23,14 +23,15 @@ Responde siempre en español.
     - `perfil/page.tsx`: Mi perfil del cliente (se abre desde su nombre en la barra superior); para guardar necesita el **paso 8** de `docs/base-de-datos.md`.
   - `lib/cliente/`: capa de datos del cliente. `tipos.ts` (forma de la base), `formato.ts`, `fuenteSupabase.ts` (consultas reales) y `fuente.ts`, que elige la fuente: con `NEXT_PUBLIC_DATOS_CLIENTE=supabase` en `.env.local` usa Supabase (requiere el **paso 9** de `docs/base-de-datos.md`); si no, usa la demo en memoria de `lib/clienteDemo.ts`.
   - `app/carrito/[id]/`: ruta vieja (un carrito por auto); redirige a `/carrito`. `Carrito.tsx` ya no se usa y se puede borrar.
-  - `app/taller/page.tsx` (pantalla 4, autos por atender del mecánico): usa datos de ejemplo; falta leerlos de Supabase y guardar los cambios de etapa.
+  - `app/taller/page.tsx` (pantalla 4, autos por atender del mecánico): lee autos, diagnósticos y pagos de Supabase, actualiza las etapas de reparación y se suscribe a cambios en vivo.
+  - `app/taller/diagnostico/[id]/` (pantallas 5 y 6): carga el catálogo, crea o reanuda el borrador, guarda sus fallas y descripción, lo envía y muestra el diagnóstico y pagos registrados en Supabase.
   - `components/BarraSuperior.tsx`: barra superior común.
   - `components/Aviso.tsx`: mensajes de confirmación y de error que usan todas las pantallas.
   - `components/BuscadorOpciones.tsx`: combo box con buscador (se usa para elegir el modelo del auto).
   - `lib/supabase/`: clientes de Supabase (`cliente.ts` navegador, `servidor.ts` servidor con sesión, `admin.ts` solo servidor con la llave secreta).
   - `components/SeguimientoEnVivo.tsx`: franja de seguimiento por auto (pastillas con las placas); después se conectará a Supabase Realtime.
   - `AGENTS.md`: Next.js 16 trae cambios; antes de escribir código hay que leer las guías en `node_modules/next/dist/docs/`.
-- **Faltan:** conectar las pantallas del mecánico con Supabase, correr el paso 9 en Supabase para activar los datos reales del cliente, y la conexión con pey (pedir el QR y el webhook).
+- **Faltan:** correr el paso 9 en Supabase para activar los datos reales del cliente y conectar pey (pedir el QR y el webhook).
 - Algunos `TODO` del código nombran tablas en inglés (`profiles`, `vehicles`, `customer_id`). En la base se llaman `perfil`, `carro` e `id_cliente`: usa siempre los nombres de `docs/base-de-datos.md`.
 
 ## 1. Qué es

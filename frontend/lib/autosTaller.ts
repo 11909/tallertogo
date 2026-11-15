@@ -1,5 +1,4 @@
-// Etapas de un auto vistas desde el taller y datos de ejemplo para la demo.
-// TODO: reemplazar AUTOS_DEMO por la consulta a Supabase (vehicles + diagnoses).
+// Etapas de un auto vistas desde el taller y datos de ejemplo usados por la demo del cliente.
 
 export type EtapaTaller =
   | "por_diagnosticar"
@@ -14,6 +13,7 @@ export type AutoTaller = {
   placas: string;
   colorCodigo: string; // código de pintura GM (ver lib/colores.ts)
   folio: string | null; // se asigna al empezar el diagnóstico
+  folioNumero?: number | null;
   etapa: EtapaTaller;
   actualizacion: string;
   registradoEn: string; // hora de registro del auto: define el turno de diagnóstico
