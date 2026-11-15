@@ -97,15 +97,12 @@ export default function TallerPage() {
 
   useEffect(() => {
     let vigente = true;
-    let canal: ReturnType<ReturnType<typeof crearClienteNavegador>["channel"]> | null = null;
-    let supabaseCliente: ReturnType<typeof crearClienteNavegador> | null = null;
 
     async function cargar() {
       setCargando(true);
       setAviso(null);
       try {
         const supabase = crearClienteNavegador();
-        supabaseCliente = supabase;
         const { data: sesion, error: errorSesion } = await supabase.auth.getUser();
         if (errorSesion) throw errorSesion;
         if (!sesion.user) {
@@ -160,17 +157,6 @@ export default function TallerPage() {
           setAutos(cargados);
           setSesionLista(true);
         }
-
-        canal = supabase
-          .channel("taller-autos")
-          .on("postgres_changes", { event: "*", schema: "public", table: "diagnostico" }, () => setRevision((n) => n + 1))
-          .on("postgres_changes", { event: "*", schema: "public", table: "orden" }, () => setRevision((n) => n + 1))
-          .subscribe((estado) => {
-            if (estado === "CHANNEL_ERROR" || estado === "TIMED_OUT") {
-              console.error("[TallerToGo] No se pudo suscribir a las actualizaciones del taller:", estado);
-              if (vigente) setAviso({ tipo: "error", texto: "No se pudo activar la actualización en vivo. Usa «Actualizar» para consultar los cambios." });
-            }
-          });
       } catch (error) {
         if (vigente) setAviso({ tipo: "error", texto: `No se pudieron cargar los autos del taller. ${mensajeDeFallo(error)}` });
       } finally {
@@ -181,9 +167,56 @@ export default function TallerPage() {
     void cargar();
     return () => {
       vigente = false;
-      if (canal && supabaseCliente) void supabaseCliente.removeChannel(canal);
     };
   }, [revision, router]);
+
+  useEffect(() => {
+    let vigente = true;
+    let canal: ReturnType<ReturnType<typeof crearClienteNavegador>["channel"]> | null = null;
+    let supabaseCliente: ReturnType<typeof crearClienteNavegador> | null = null;
+
+    async function suscribir() {
+      try {
+        const supabase = crearClienteNavegador();
+        supabaseCliente = supabase;
+        const { data: sesion, error: errorSesion } = await supabase.auth.getUser();
+        if (errorSesion) throw errorSesion;
+        if (!sesion.user) {
+          router.replace("/login");
+          return;
+        }
+
+        const { data: perfil, error: errorPerfil } = await supabase
+          .from("perfil")
+          .select("rol")
+          .eq("id_perfil", sesion.user.id)
+          .maybeSingle();
+        if (errorPerfil) throw errorPerfil;
+        if (perfil?.rol !== "mecanico") return;
+        if (!vigente) return;
+
+        const identificador = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        canal = supabase
+          .channel(`taller-autos-${identificador}`)
+          .on("postgres_changes", { event: "*", schema: "public", table: "diagnostico" }, () => setRevision((n) => n + 1))
+          .on("postgres_changes", { event: "*", schema: "public", table: "orden" }, () => setRevision((n) => n + 1))
+          .subscribe((estado, error) => {
+            if (estado === "CHANNEL_ERROR" || estado === "TIMED_OUT") {
+              console.error("[TallerToGo] No se pudo suscribir a las actualizaciones del taller:", error ?? estado);
+              if (vigente) setAviso({ tipo: "error", texto: "No se pudo activar la actualización en vivo. Usa «Actualizar» para consultar los cambios." });
+            }
+          });
+      } catch (error) {
+        if (vigente) setAviso({ tipo: "error", texto: `No se pudo activar la actualización en vivo. ${mensajeDeFallo(error)}` });
+      }
+    }
+
+    void suscribir();
+    return () => {
+      vigente = false;
+      if (canal && supabaseCliente) void supabaseCliente.removeChannel(canal);
+    };
+  }, [router]);
 
   const visibles = useMemo(() => {
     const q = normalizar(busqueda);
