@@ -186,7 +186,13 @@ export default function TallerPage() {
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       {auto.folio ? (
-                        <span className="font-mono text-sm">{auto.folio}</span>
+                        <Link
+                          href={`/taller/diagnostico/${auto.id}/ver`}
+                          className="font-mono text-sm underline decoration-borde underline-offset-4 hover:decoration-tinta"
+                          title="Ver diagnóstico"
+                        >
+                          {auto.folio}
+                        </Link>
                       ) : (
                         <span className="text-sm text-suave/70">Sin folio</span>
                       )}
