@@ -36,6 +36,8 @@ No se agregan otros lenguajes ni frameworks. Se descartó Python/Django para no 
 
 - **Login con rol:** cada usuario es `cliente` o `mecanico`. Solo hay una cuenta de mecánico, creada a mano.
 - **Solo Chevrolet 2025.**
+- **Hasta 3 autos por cliente.** Cada auto se registra con sus placas (únicas) y uno de los **10 colores de fábrica** del Corvette Z06 2025: Arctic White, Black, Competition Yellow Tintcoat Metallic, Hysteria Purple Metallic, Rapid Blue, Red Mist Metallic Tintcoat, Riptide Blue Metallic, Sea Wolf Gray Tricoat, Sebring Orange Tintcoat y Torch Red. No se pide el número de serie (VIN).
+- **Cada auto tiene su propio diagnóstico, recibo y seguimiento.** Un auto puede estar en reparación mientras otro sigue en diagnóstico.
 - **Solo 2 marcas: OEM y GM.** Cada pieza-posición del catálogo existe en las dos marcas, cada una con su nombre y su precio. **No** se etiquetan como "económica" o "premium".
 - **Granularidad 1 a 1 (pieza-posición):** cada combinación de pieza y posición del catálogo es un **dato independiente**, con su propio ID. Por ejemplo, `SUS-DEL-05-IZQ` (coilover delantero izquierdo) y `SUS-DEL-05-DER` (coilover delantero derecho) son dos piezas distintas, sin relación entre sí en la lógica de la app. No existe "ambos lados": si fallan los dos coilovers, se registran como dos fallas.
 - **Posición:**
@@ -56,7 +58,7 @@ No se agregan otros lenguajes ni frameworks. Se descartó Python/Django para no 
 | Diagnóstico | borrador → enviado → pagado → en_reparacion → listo → entregado | El mecánico; `pagado` lo pone solo la confirmación de pey |
 | Orden | pendiente → pagado / expirado / reembolso | Solo el servidor |
 
-El **seguimiento en vivo** que ve el cliente es el estado del diagnóstico desde `enviado`, actualizado en tiempo real con Supabase Realtime.
+El **seguimiento en vivo** que ve el cliente es el estado del diagnóstico desde `enviado`, actualizado en tiempo real con Supabase Realtime. Se muestra **por auto**: en la franja de seguimiento, el cliente elige con pastillas (las placas) de qué auto ve el avance.
 
 ### Fuera de alcance
 
@@ -114,7 +116,7 @@ Los ganadores se anuncian por correo.
 
 ## 8. Alcance funcional (pantallas)
 
-- **Acceso:** login, registro de cliente y registro de su auto (Corvette Z06 2025).
+- **Acceso:** login, registro de cliente y registro de sus autos (hasta 3 Corvette Z06 2025).
 - **Mecánico:**
   - Lista de autos y diagnósticos.
   - Formulario de fallas: se elige una pieza-posición del catálogo y se captura la descripción de la falla y la mano de obra.
