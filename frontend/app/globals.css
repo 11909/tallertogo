@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+/* Paleta "Pista" y tipografía Barlow (ver sección 11 del CLAUDE.md) */
+@theme inline {
+  --color-fondo: #f5f5f4;     /* fondo de pantalla */
+  --color-tarjeta: #ffffff;   /* tarjetas */
+  --color-borde: #e2e2e0;     /* bordes y divisiones */
+  --color-suave: #6b6f76;     /* texto secundario */
+  --color-tinta: #111214;     /* texto principal */
+  --color-acento: #f2b705;    /* amarillo Accelerate: un solo botón de acento por pantalla */
+  --color-error: #b42318;     /* solo para mensajes de error, siempre con ícono */
+
+  --font-sans: var(--font-barlow);
+  --font-titulo: var(--font-barlow-condensed);
+}
+
+body {
+  background: var(--color-fondo);
+  color: var(--color-tinta);
+  font-family: var(--font-barlow), system-ui, sans-serif;
+}

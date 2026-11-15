@@ -13,7 +13,7 @@ Proyecto para un hackatón que usa la **API de pey en su modalidad CoDi**. Somos
 - **Rafael:** lado del **mecánico**.
 - **Miguel Ángel:** lado del **usuario (cliente)**.
 
-TallerToGo es una página web para un taller mecánico especializado **solo en suspensión** de autos **Chevrolet 2025**. El taller trabaja con **solo dos marcas de refacciones: OEM y GM**. El flujo es así:
+TallerToGo es una página web para un taller mecánico especializado **solo en suspensión** de auto **Chevrolet Corvette Z06 2025**. El taller trabaja con **solo dos marcas de refacciones: OEM y GM**. El flujo es así:
 
 1. El mecánico diagnostica el auto y registra cada falla como una **pieza en una posición concreta**, con la mano de obra de esa falla.
 2. Envía el diagnóstico al cliente.
@@ -140,3 +140,41 @@ Los ganadores se anuncian por correo.
 - No escribas CLABEs, API keys ni secretos en ningún archivo del repo.
 - Estamos en la etapa de delimitación: antes de generar código, confirma que te lo pidieron.
 - Si una decisión cambia, propón la edición a este `CLAUDE.md` en el mismo cambio.
+- Para cualquier pantalla, usa solo los colores y la tipografía de la sección 11.
+
+## 11. Diseño visual
+
+Estilo **minimalista con aire automotriz**: base clara y neutra, con **un solo color de acento** (amarillo Accelerate del Corvette).
+
+### Paleta "Pista"
+
+| Uso | Color |
+| --- | --- |
+| Fondo de pantalla | `#F5F5F4` |
+| Tarjetas (cada falla, carrito) | `#FFFFFF` |
+| Bordes y divisiones | `#E2E2E0` |
+| Texto secundario (eje, lado, notas) | `#6B6F76` |
+| Texto principal | `#111214` |
+| Acento | `#F2B705` (amarillo Accelerate) |
+
+- **Un solo botón de acento por pantalla** (por ejemplo "Pagar con CoDi", "Enviar diagnóstico" o "Entrar"), con fondo `#F2B705` y texto `#111214`. Los demás botones van solo con borde.
+- La opción elegida en el selector OEM/GM se marca con fondo `#111214` y texto `#F2B705`.
+- Estados del seguimiento: verde tenue para "Pagado" y "Listo"; gris para "En reparación" y "Entregado". No compiten con el acento.
+- Los errores llevan siempre ícono y texto claro (por ejemplo "No se pudo generar el QR").
+
+### Tipografía: Barlow
+
+Una sola familia, de Google Fonts, cargada con `next/font/google`: **Barlow Condensed** para títulos, precios y botones; **Barlow** para el texto. Opcional: **JetBrains Mono** solo para los ID de pieza.
+
+| Elemento | Letra | Tamaño | Peso |
+| --- | --- | --- | --- |
+| Título de pantalla | Barlow Condensed | 24 px | 600 |
+| Precios y total | Barlow Condensed | 22 px | 600 |
+| Botones | Barlow Condensed | 17 px | 600 |
+| Nombre de la pieza | Barlow | 16 px | 600 |
+| Texto normal | Barlow | 16 px | 400 |
+| Texto secundario (eje, lado, notas) | Barlow | 14 px | 400 |
+| ID de la pieza (`SUS-DEL-05-IZQ`) | JetBrains Mono | 12 px | 400 |
+
+- Máximo dos pesos por pantalla: 400 y 600.
+- En celular, los botones miden al menos 44 px de alto y ningún texto baja de 14 px (salvo el ID de pieza).
